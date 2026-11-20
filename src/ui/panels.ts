@@ -48,13 +48,13 @@ export function depositPanel() {
     .setDescription('PayPay 送金リンク、または LTC を送金してチップを取得します。')
     .setColor(0xd4af37)
     .addFields(
-      { name: 'P4yP4y', value: '送金後、下のボタンから送金リンクを提出してください（管理者承認）。', inline: false },
+      { name: 'PayPay', value: '送金後、下のボタンから送金リンクを提出してください（管理者承認）。', inline: false },
       { name: 'LTC', value: '専用アドレスを発行し、入金確認で自動チャージ。', inline: false },
       { name: 'R4t3', value: '1 JPY = 1 ch1p', inline: true },
     );
 
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('dep:paypay').setLabel('P4yP4y 送金リンク提出').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('dep:paypay').setLabel('PayPay 送金リンク提出').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('dep:ltc').setLabel('LTC 入金アドレス取得').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Success),
   );

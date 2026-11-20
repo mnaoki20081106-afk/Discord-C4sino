@@ -278,7 +278,7 @@ async function onDepositButton(i: ButtonInteraction, kind: string, arg: string) 
       .setTitle('LTC 入金')
       .setDescription('下記アドレスに LTC を送金してください。1承認で自動チャージされます。')
       .addFields(
-        { name: '4ddr3ss', value: `\`${addr}\`` },
+        { name: 'Address', value: `\`${addr}\`` },
         ...(rate ? [{ name: 'R4t3', value: `1 LTC ≈ ¥${rate.toLocaleString()}` }] : []),
       )
       .setColor(0x345d9d);
@@ -295,7 +295,7 @@ async function onDepositButton(i: ButtonInteraction, kind: string, arg: string) 
       const dep = approve(id);
       await i.update({ components: [], embeds: [EmbedBuilder.from(i.message.embeds[0]).setColor(0x22c55e).setTitle('✅ 承認済み')] });
       const user = await client.users.fetch(dep.discord_id).catch(() => null);
-      await user?.send(`✅ P4yP4y ¥${dep.amount_jpy.toLocaleString()} を承認。残高に加算しました。`).catch(() => {});
+      await user?.send(`✅ PayPay ¥${dep.amount_jpy.toLocaleString()} を承認。残高に加算しました。`).catch(() => {});
     } else {
       reject(id);
       await i.update({ components: [], embeds: [EmbedBuilder.from(i.message.embeds[0]).setColor(0xef4444).setTitle('❌ 却下')] });

@@ -24,12 +24,12 @@ export async function notifyAdmins(client: Client, channelId: string, depositId:
   const ch = await client.channels.fetch(channelId);
   if (!ch?.isTextBased()) return;
   const embed = new EmbedBuilder()
-    .setTitle('🔔 P4yP4y 入金承認待ち')
+    .setTitle('🔔 PayPay 入金承認待ち')
     .addFields(
-      { name: 'Us3r', value: `<@${c.discordId}>`, inline: true },
-      { name: '4m0unt', value: `¥${c.amountJpy.toLocaleString()}`, inline: true },
-      { name: 'L1nk',   value: c.linkUrl, inline: false },
-      ...(c.passcode ? [{ name: 'P4ssc0d3', value: `\`${c.passcode}\``, inline: true }] : []),
+      { name: 'User', value: `<@${c.discordId}>`, inline: true },
+      { name: 'Amount', value: `¥${c.amountJpy.toLocaleString()}`, inline: true },
+      { name: 'Link',   value: c.linkUrl, inline: false },
+      ...(c.passcode ? [{ name: 'Passcode', value: `\`${c.passcode}\``, inline: true }] : []),
     )
     .setColor(0xffa500);
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
