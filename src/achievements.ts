@@ -5,7 +5,7 @@ import { L } from './ui/leet.js';
 export interface AchievementRecord {
   guildId: string;
   discordId: string;
-  game: 'blackjack' | 'slots' | 'roulette' | 'baccarat' | 'videopoker';
+  game: 'blackjack' | 'slots' | 'roulette' | 'baccarat' | 'videopoker' | 'craps';
   bet: number;
   payout: number;
   net: number;
@@ -17,6 +17,7 @@ const GAME_LABEL: Record<string, string> = {
   roulette:  'Roulette',
   baccarat:  'Baccarat',
   videopoker:'Video Poker',
+  craps:     'Craps',
 };
 const GAME_EMOJI: Record<string, string> = {
   blackjack: '🂡',
@@ -24,6 +25,7 @@ const GAME_EMOJI: Record<string, string> = {
   roulette:  '🎡',
   baccarat:  '🎴',
   videopoker:'🃏',
+  craps:     '🎲',
 };
 
 export function countAchievements(guildId: string): number {
@@ -99,6 +101,7 @@ export async function announce(client: Client, a: AchievementRecord): Promise<vo
   : a.game === 'roulette'  ? (mult >= 30   ? 'BIG WIN' : 'WIN')
   : a.game === 'videopoker'? (mult >= 500  ? 'JACKPOT' : mult >= 20 ? 'BIG WIN' : 'WIN')
   : a.game === 'baccarat'  ? (mult >= 8    ? 'BIG WIN' : 'WIN')
+  : a.game === 'craps'     ? (mult >= 20   ? 'BIG WIN' : 'WIN')
   :                          (a.net >= a.bet * 4 ? 'BIG WIN' : 'WIN');
   const color = tier === 'JACKPOT' ? 0xffd93d : tier === 'BIG WIN' ? 0xf59e0b : 0x22c55e;
 

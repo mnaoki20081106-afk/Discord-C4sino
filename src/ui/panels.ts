@@ -1,4 +1,4 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } from 'discord.js';
 import { L } from './leet.js';
 
 export function blackjackPanel() {
@@ -140,6 +140,75 @@ export function vpHoldRow(held: boolean[]): ActionRowBuilder<ButtonBuilder>[] {
     new ButtonBuilder().setCustomId('vp:draw').setLabel('🎴 DRAW').setStyle(ButtonStyle.Primary),
   );
   return [row1, row2];
+}
+
+/** Craps 設置用パネル (入口) */
+export function crapsPanel() {
+  const embed = new EmbedBuilder()
+    .setTitle(`🎲  ${L('CRAPS')}  🎲`)
+    .setDescription(
+      '定番のダイスゲーム。Pass / Don\'t Pass から Hardways / Props まで 25 種類のベット。\n' +
+      '「🎲 START」でセッション開始、ephemeral で進行します。'
+    )
+    .setColor(0x0d5a3a)
+    .addFields(
+      { name: 'Pays (抜粋)', value:
+        'Pass / Don\'t Pass / Come / Don\'t Come  **×2**\n' +
+        'Field (3,4,9,10,11)  **×2**  /  (2,12)  **×3**\n' +
+        'Place 4/10 **×2.8**  /  5/9 **×2.4**  /  6/8 **×2.17**\n' +
+        'Hard 4/10 **×8**  /  6/8 **×10**\n' +
+        'Any 7 **×5**  /  Any Craps **×8**  /  Yo **×16**\n' +
+        'Snake Eyes (2) / Boxcars (12)  **×31**',
+        inline: false },
+      { name: 'House edge', value: 'Pass **1.41%** / Don\'t Pass **1.36%** / Pass Odds **0%** / Prop 11–17%', inline: false },
+    )
+    .setFooter({ text: 'Discord C4sino · Craps Table' });
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('cr:start').setLabel('🎲 START').setStyle(ButtonStyle.Success),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
+/** Craps 進行中: ベット選択 (SelectMenu) + ROLL / END */
+export function crapsControlRows(state: { phase: 'comeout'|'point'; point?: number; betCount: number }) {
+  const opts = [
+    ['pass',       'Pass Line (×2) — comeout 推奨'],
+    ['dontpass',   "Don't Pass (×2) — 逆張り"],
+    ['pass_odds',  'Pass Odds (×2.2-3) — ポイント必須, no edge'],
+    ['dontpass_odds', "Don't Pass Odds — 要ポイント, no edge"],
+    ['come',       'Come (×2) — ポイント中のみ'],
+    ['dontcome',   "Don't Come — ポイント中のみ"],
+    ['field',      'Field (×2 / ×3) — ワンロール'],
+    ['place4',     'Place 4 (×2.8)'],
+    ['place5',     'Place 5 (×2.4)'],
+    ['place6',     'Place 6 (×2.17)'],
+    ['place8',     'Place 8 (×2.17)'],
+    ['place9',     'Place 9 (×2.4)'],
+    ['place10',    'Place 10 (×2.8)'],
+    ['hard4',      'Hard 4 (×8)'],
+    ['hard6',      'Hard 6 (×10)'],
+    ['hard8',      'Hard 8 (×10)'],
+    ['hard10',     'Hard 10 (×8)'],
+    ['big6',       'Big 6 (×2)'],
+    ['big8',       'Big 8 (×2)'],
+    ['any7',       'Any 7 (×5) — ワンロール'],
+    ['anycraps',   'Any Craps (×8) — ワンロール'],
+    ['yo11',       'Yo 11 (×16) — ワンロール'],
+    ['snakeeyes',  'Snake Eyes 2 (×31) — ワンロール'],
+    ['acedeuce',   'Ace-Deuce 3 (×16) — ワンロール'],
+    ['boxcars',    'Boxcars 12 (×31) — ワンロール'],
+  ] as const;
+  const select = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder().setCustomId('cr:add').setPlaceholder('🔽 ベットタイプを選択…')
+      .addOptions(opts.map(([v, l]) => new StringSelectMenuOptionBuilder().setValue(v).setLabel(l.slice(0, 100))))
+  );
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('cr:roll').setLabel('🎲 ROLL').setStyle(ButtonStyle.Primary).setDisabled(state.betCount === 0),
+    new ButtonBuilder().setCustomId('cr:undo').setLabel('↩ 直前のベット取消').setStyle(ButtonStyle.Secondary).setDisabled(state.betCount === 0),
+    new ButtonBuilder().setCustomId('cr:end').setLabel('END').setStyle(ButtonStyle.Danger),
+  );
+  return [select, row];
 }
 
 export function depositPanel() {

@@ -3,7 +3,7 @@ import { SYMBOLS } from '../games/slots.js';
 import { MIN_DEPOSIT_JPY, MIN_BET_CHIPS, MAX_BET_CHIPS } from '../payments/limits.js';
 import { L } from './leet.js';
 
-export type GameKey = 'blackjack' | 'slots' | 'roulette' | 'baccarat' | 'videopoker' | 'cashier' | 'all';
+export type GameKey = 'blackjack' | 'slots' | 'roulette' | 'baccarat' | 'videopoker' | 'craps' | 'cashier' | 'all';
 
 /** スロットの実 RTP を重みから計算 */
 export function computeSlotsRTP() {
@@ -178,6 +178,37 @@ export function videopokerOverview(): EmbedBuilder {
     .setFooter({ text: 'Discord C4sino · Video Poker Overview' });
 }
 
+export function crapsOverview(): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle(`🎲  ${L('CRAPS')} — ${L('OVERVIEW')}`)
+    .setColor(0x0d5a3a)
+    .setDescription('2 個のダイスで進行するマルチロール式ゲーム。Come-out → Point phase を繰り返す。')
+    .addFields(
+      { name: '🎯 Phase', value:
+        '**Come-out roll**  7/11=Pass勝, 2/3/12=Pass負, 4-10=Point成立\n' +
+        '**Point phase**   Point再出=Pass勝, 7=Seven-out (負)',
+        inline: false },
+      { name: '💰 Line Bets (House edge 低)', value:
+        'Pass **×2** (edge 1.41%) / Don\'t Pass **×2** (edge 1.36%)\n' +
+        'Come / Don\'t Come も同等\n' +
+        'Pass Odds / Don\'t Pass Odds は **真の確率** (edge 0%)',
+        inline: false },
+      { name: '💰 Place / Hardways', value:
+        'Place 4/10 **×2.8** (edge 6.67%) / 5/9 **×2.4** (4.0%) / 6/8 **×2.17** (1.52%)\n' +
+        'Hard 4/10 **×8** (edge 11.11%) / Hard 6/8 **×10** (9.09%)',
+        inline: false },
+      { name: '💰 Props (ワンロール, 高エッジ)', value:
+        'Field (3-11) **×2** / (2,12) **×3** (edge 2.78%)\n' +
+        'Any 7 **×5** (edge 16.67%) / Any Craps **×8** (11.11%)\n' +
+        'Yo 11 **×16** (11.11%)\n' +
+        'Snake Eyes (2) **×31** (13.89%) / Boxcars (12) **×31** (13.89%)',
+        inline: false },
+      { name: '📐 Bet range', value: `**10** 〜 **50,000** ${L('chips')} (各ベット)`, inline: true },
+      { name: '💳 最低入金額', value: depositLine(), inline: false },
+    )
+    .setFooter({ text: 'Discord C4sino · Craps Overview' });
+}
+
 export function cashierOverview(): EmbedBuilder {
   return new EmbedBuilder()
     .setTitle('💵  CASHIER — 入金について')
@@ -241,6 +272,12 @@ export function allOverview(): EmbedBuilder {
           '**RTP ≈ 99.54%** (最適プレイ時)\n' +
           `Max: Royal Flush ×800 / Bet: 10 〜 50,000 ${L('chips')}`,
         inline: false },
+      { name: `🎲 ${L('CRAPS')}`,
+        value:
+          'マルチロール式 (Come-out → Point)\n' +
+          '**Pass Line edge 1.41%**  /  Odds は 0%\n' +
+          `Max: 30:1 (Snake Eyes / Boxcars) / Bet: 10 〜 50,000 ${L('chips')}`,
+        inline: false },
       { name: '💳 最低入金額', value: depositLine(), inline: false },
       { name: '📒 用語',
         value:
@@ -258,6 +295,7 @@ export function gameOverview(game: GameKey): EmbedBuilder {
   if (game === 'roulette')  return rouletteOverview();
   if (game === 'baccarat')  return baccaratOverview();
   if (game === 'videopoker') return videopokerOverview();
+  if (game === 'craps')     return crapsOverview();
   if (game === 'cashier')   return cashierOverview();
   return allOverview();
 }

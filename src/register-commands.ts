@@ -11,6 +11,7 @@ const setup = new SlashCommandBuilder()
       { name: 'Roulette',    value: 'roulette' },
       { name: 'Baccarat',    value: 'baccarat' },
       { name: 'Video Poker', value: 'videopoker' },
+      { name: 'Craps',       value: 'craps' },
       { name: 'Cashier (入金)', value: 'cashier' },
     ));
 
@@ -30,6 +31,7 @@ const overview = new SlashCommandBuilder()
       { name: 'Roulette',              value: 'roulette' },
       { name: 'Baccarat',              value: 'baccarat' },
       { name: 'Video Poker',           value: 'videopoker' },
+      { name: 'Craps',                 value: 'craps' },
       { name: 'Cashier (入金について)', value: 'cashier' },
     ));
 

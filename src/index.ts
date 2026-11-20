@@ -12,16 +12,18 @@ import { spin, reelStrip } from './games/slots.js';
 import { spinRoulette, payoutMult as rouPayout, WHEEL, type BetKind as RouKind } from './games/roulette.js';
 import { dealBaccarat, payoutMult as bacPayout, type Side as BacSide } from './games/baccarat.js';
 import { startVP, drawVP, payoutFor, type VPHand } from './games/videopoker.js';
+import { newCraps, addBet, roll as crapsRoll, MULT as CRAPS_MULT, openExposure, type CrapsBetKind, type CrapsState, type CrapsBet } from './games/craps.js';
 import { renderBlackjack } from './ui/render-table.js';
 import { renderSlots } from './ui/render-slots.js';
 import { renderRoulette } from './ui/render-roulette.js';
 import { renderBaccarat } from './ui/render-baccarat.js';
 import { renderVideoPoker } from './ui/render-videopoker.js';
-import { blackjackPanel, slotsPanel, roulettePanel, baccaratPanel, videopokerPanel, vpHoldRow, depositPanel, bjActionsRow } from './ui/panels.js';
+import { renderCraps } from './ui/render-craps.js';
+import { blackjackPanel, slotsPanel, roulettePanel, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow } from './ui/panels.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
-import { assertBetAffordable, invalidateLiquidityCache, maxAffordableBet } from './payments/liquidity.js';
+import { assertBetAffordable, assertCrapsBetAffordable, setCrapsExposure, clearCrapsExposure, invalidateLiquidityCache, maxAffordableBet } from './payments/liquidity.js';
 import { MIN_DEPOSIT_JPY } from './payments/limits.js';
 import { L } from './ui/leet.js';
 import { gameOverview, type GameKey } from './ui/overview.js';
@@ -111,6 +113,7 @@ async function cmdSetup(i: ChatInputCommandInteraction) {
                : game === 'roulette'    ? roulettePanel()
                : game === 'baccarat'    ? baccaratPanel()
                : game === 'videopoker'  ? videopokerPanel()
+               : game === 'craps'       ? crapsPanel()
                : depositPanel();
   if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
   const msg = await i.channel.send(payload);
@@ -245,7 +248,8 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
             `Slots:       **${m.slots.toLocaleString()}**\n` +
             `Roulette:    **${m.roulette.toLocaleString()}**\n` +
             `Baccarat:    **${m.baccarat.toLocaleString()}**\n` +
-            `Video Poker: **${m.videopoker.toLocaleString()}**`,
+            `Video Poker: **${m.videopoker.toLocaleString()}**\n` +
+            `Craps:       **${m.craps.toLocaleString()}**`,
           inline: false },
       );
     return i.editReply({ embeds: [embed] });
@@ -306,6 +310,7 @@ async function onButton(i: ButtonInteraction) {
   if (ns === 'rou')  return onRouletteButton(i, kind, arg);
   if (ns === 'bac')  return onBaccaratButton(i, kind, arg);
   if (ns === 'vp')   return onVpButton(i, kind, arg);
+  if (ns === 'cr')   return onCrapsButton(i, kind, arg);
   if (ns === 'dep') return onDepositButton(i, kind, arg);
   if (ns === 'adm') return onAdminButton(i, kind);
   if (ns === 'bal') {
@@ -413,7 +418,7 @@ async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
   }
 }
 
-async function onGameSettled(i: ButtonInteraction | ModalSubmitInteraction, game: 'blackjack'|'slots'|'roulette'|'baccarat'|'videopoker', st: BJState | null, extBet?: number, extPayout?: number) {
+async function onGameSettled(i: ButtonInteraction | ModalSubmitInteraction, game: 'blackjack'|'slots'|'roulette'|'baccarat'|'videopoker'|'craps', st: BJState | null, extBet?: number, extPayout?: number) {
   if (!i.guildId) return;
   let bet = 0, payout = 0;
   if (game === 'blackjack' && st) {
@@ -601,6 +606,165 @@ async function doRouletteSpin(
   }
 }
 
+/* ────────────── CRAPS ────────────── */
+
+async function onCrapsButton(i: ButtonInteraction, kind: string, _arg: string) {
+  assertNotBanned(i.user.id);
+  if (kind === 'start') {
+    ensureUser(i.user.id);
+    const st = newCraps();
+    const entry = sessions.create(i.user.id, 'craps', st, 0);
+    setCrapsExposure(entry.id, 0);
+    return sendCrapsEphemeral(i, entry.id, st);
+  }
+
+  // 以降は進行中セッション前提
+  const sid = extractSid(i.message.embeds[0]?.footer?.text);
+  if (!sid) return i.reply({ content: 'セッションが見つかりません', flags: MessageFlags.Ephemeral });
+  const entry = sessions.get(sid);
+  if (!entry || entry.discordId !== i.user.id) return i.reply({ content: '他ユーザーのセッションです', flags: MessageFlags.Ephemeral });
+  const st = entry.state as CrapsState;
+
+  if (kind === 'undo') {
+    const last = st.bets.pop();
+    if (last) {
+      txCredit(i.user.id, last.amount, 'bet:craps:undo', sid);
+      st.totalWagered -= last.amount;
+      setCrapsExposure(sid, openExposure(st));
+    }
+    return updateCrapsMessage(i, sid, st);
+  }
+
+  if (kind === 'end') {
+    clearCrapsExposure(sid);
+    sessions.drop(sid);
+    const final = await renderCraps({ state: st, balance: getBalance(i.user.id) });
+    const net = st.totalReturned - st.totalWagered;
+    const embed = new EmbedBuilder()
+      .setImage('attachment://craps-end.png')
+      .setColor(net > 0 ? 0x22c55e : net < 0 ? 0xef4444 : 0x9ca3af)
+      .setTitle(`${L('CRAPS')} セッション終了`)
+      .setDescription(`累計 ${net>=0?'+':''}${net.toLocaleString()} ${L('chips')} (賭 ${st.totalWagered.toLocaleString()} / 戻 ${st.totalReturned.toLocaleString()})`);
+    return i.update({
+      embeds: [embed],
+      files: [new AttachmentBuilder(final, { name: 'craps-end.png' })],
+      components: [], attachments: [],
+    });
+  }
+
+  if (kind === 'roll') {
+    if (st.bets.length === 0) return i.reply({ content: 'ベットがありません', flags: MessageFlags.Ephemeral });
+    return doCrapsRoll(i, sid, st);
+  }
+}
+
+async function sendCrapsEphemeral(i: ButtonInteraction, sid: string, st: CrapsState) {
+  const buf = await renderCraps({ state: st, balance: getBalance(i.user.id) });
+  const file = new AttachmentBuilder(buf, { name: 'craps.png' });
+  const embed = new EmbedBuilder().setImage('attachment://craps.png').setColor(0x0d5a3a).setFooter({ text: `sid=${sid}` });
+  const rows = crapsControlRows({ phase: st.phase, point: st.point, betCount: st.bets.length });
+  await i.reply({ embeds: [embed], files: [file], components: rows, flags: MessageFlags.Ephemeral });
+}
+
+async function updateCrapsMessage(i: ButtonInteraction, sid: string, st: CrapsState) {
+  const buf = await renderCraps({ state: st, balance: getBalance(i.user.id) });
+  const file = new AttachmentBuilder(buf, { name: 'craps.png' });
+  const embed = new EmbedBuilder().setImage('attachment://craps.png').setColor(0x0d5a3a).setFooter({ text: `sid=${sid}` });
+  const rows = crapsControlRows({ phase: st.phase, point: st.point, betCount: st.bets.length });
+  await i.update({ embeds: [embed], files: [file], components: rows, attachments: [] });
+}
+
+async function placeCrapsBet(i: ModalSubmitInteraction, sid: string, kind: CrapsBetKind, amount: number) {
+  assertNotBanned(i.user.id);
+  const entry = sessions.get(sid);
+  if (!entry || entry.discordId !== i.user.id) return i.reply({ content: 'セッションが見つかりません', flags: MessageFlags.Ephemeral });
+  const st = entry.state as CrapsState;
+
+  if (!Number.isFinite(amount) || amount < 10 || amount > 50_000)
+    return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
+
+  // フェーズ制約
+  if ((kind === 'pass_odds' || kind === 'dontpass_odds') && st.phase !== 'point')
+    return i.reply({ content: `Odds はポイント確立後のみ`, flags: MessageFlags.Ephemeral });
+  if ((kind === 'come' || kind === 'dontcome') && st.phase !== 'point')
+    return i.reply({ content: `Come / Don't Come はポイント確立後のみ`, flags: MessageFlags.Ephemeral });
+  if (kind === 'pass' && st.phase === 'point')
+    return i.reply({ content: `Pass Line は come-out 時のみ (今は Come を使用)`, flags: MessageFlags.Ephemeral });
+  if (kind === 'dontpass' && st.phase === 'point')
+    return i.reply({ content: `Don't Pass は come-out 時のみ (今は Don't Come を使用)`, flags: MessageFlags.Ephemeral });
+
+  if (getBalance(i.user.id) < amount)
+    return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
+
+  // 流動性ガード: 既存露出 + 新ベットの max gross が実効流動性を超えないか
+  const existing = openExposure(st);
+  const newMax = amount * CRAPS_MULT[kind];
+  try { await assertCrapsBetAffordable(sid, existing, newMax); }
+  catch (e) { return i.reply({ content: `🏦 ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
+
+  txCredit(i.user.id, -amount, `bet:craps:${kind}`, sid);
+  addBet(st, kind, amount);
+  setCrapsExposure(sid, openExposure(st));
+
+  await i.deferUpdate().catch(()=>{});
+  // 編集可能なのは直前のメッセージなので editReply
+  const buf = await renderCraps({ state: st, balance: getBalance(i.user.id) });
+  const file = new AttachmentBuilder(buf, { name: 'craps.png' });
+  const embed = new EmbedBuilder().setImage('attachment://craps.png').setColor(0x0d5a3a).setFooter({ text: `sid=${sid}` });
+  const rows = crapsControlRows({ phase: st.phase, point: st.point, betCount: st.bets.length });
+  await i.editReply({ embeds: [embed], files: [file], components: rows, attachments: [] });
+}
+
+async function doCrapsRoll(i: ButtonInteraction, sid: string, st: CrapsState) {
+  const report = crapsRoll(st);
+  st.lastRoll = [report.d1, report.d2];
+  let totalPayout = 0;
+  const newBets: CrapsBet[] = [];
+  for (const r of report.resolutions) {
+    if (r.payout > 0) {
+      totalPayout += r.payout;
+    }
+    if (r.stay) {
+      if (r.pointMoved) r.bet.point = r.pointMoved;
+      newBets.push(r.bet);
+    }
+    // 勝利/push で part-of payout が戻る場合、Place/Hardways のような stay=true は amount を温存 (payout は追加のみ) — win(mult-1) を使用済み
+  }
+  st.bets = newBets;
+
+  // フェーズ遷移
+  if (report.phaseChange === 'pointSet') { st.phase = 'point'; st.point = report.newPoint; }
+  if (report.phaseChange === 'pointHit' || report.phaseChange === 'seven_out') { st.phase = 'comeout'; st.point = undefined; }
+
+  // 残高加算
+  if (totalPayout > 0) {
+    txCredit(i.user.id, totalPayout, 'win:craps', sid);
+    st.totalReturned += totalPayout;
+  }
+
+  // 履歴
+  st.history.push(report.log);
+  if (st.history.length > 20) st.history.shift();
+
+  setCrapsExposure(sid, openExposure(st));
+
+  // 当選があれば実績通知 (1 roll 内の純利 > 0 なら)
+  const wagerDelta = report.resolutions.reduce((s, r) => s + (r.stay ? 0 : r.bet.amount), 0);
+  const netThisRoll = totalPayout - wagerDelta;
+  if (netThisRoll > 0 && i.guildId) {
+    await ach.announce(client, {
+      guildId: i.guildId, discordId: i.user.id, game: 'craps',
+      bet: wagerDelta, payout: totalPayout, net: netThisRoll,
+    });
+    ach.recordAchievement({
+      guildId: i.guildId, discordId: i.user.id, game: 'craps',
+      bet: wagerDelta, payout: totalPayout, net: netThisRoll,
+    });
+  }
+
+  await updateCrapsMessage(i, sid, st);
+}
+
 /* ────────────── BACCARAT ────────────── */
 
 async function onBaccaratButton(i: ButtonInteraction, kind: string, arg: string) {
@@ -735,6 +899,20 @@ async function onSelect(i: StringSelectMenuInteraction) {
     if (choice === 'paypay') return openPaypayDepositModal(i);
     if (choice === 'ltc')    return showLtcAddress(i);
   }
+  if (i.customId === 'cr:add') {
+    assertNotBanned(i.user.id);
+    const kind = i.values[0] as CrapsBetKind;
+    const sid  = extractSid(i.message.embeds[0]?.footer?.text);
+    if (!sid) return i.reply({ content: 'セッションが見つかりません', flags: MessageFlags.Ephemeral });
+    const entry = sessions.get(sid);
+    if (!entry || entry.discordId !== i.user.id) return i.reply({ content: '他ユーザーのセッションです', flags: MessageFlags.Ephemeral });
+
+    const modal = new ModalBuilder().setCustomId(`cr:bet:${sid}:${kind}`).setTitle(`${L('CRAPS')} — ${kind}`)
+      .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)
+      ));
+    return i.showModal(modal);
+  }
 }
 
 async function openPaypayDepositModal(i: ButtonInteraction | StringSelectMenuInteraction | ChatInputCommandInteraction) {
@@ -838,6 +1016,13 @@ async function onModal(i: ModalSubmitInteraction) {
     const amt = parseInt(i.fields.getTextInputValue('amt'), 10);
     if (!Number.isFinite(amt)) return i.reply({ content: '不正な数値', flags: MessageFlags.Ephemeral });
     return startBJ(i, amt);
+  }
+  if (i.customId.startsWith('cr:bet:')) {
+    const parts = i.customId.split(':');          // cr:bet:<sid>:<kind>
+    const sid = parts[2], kind = parts[3] as CrapsBetKind;
+    const raw = i.fields.getTextInputValue('amt').replace(/[,\s¥]/g, '');
+    const amt = parseInt(raw, 10);
+    return placeCrapsBet(i, sid, kind, amt);
   }
   if (i.customId.startsWith('bac:amt:')) {
     const side = i.customId.split(':')[2] as BacSide;
