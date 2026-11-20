@@ -1,8 +1,8 @@
 // カジノ用語専用のランダム LEET 置換。
-// 各文字について、下記候補からランダムで1つ選ぶ。候補には「元の文字そのまま」も必ず含める。
+// 大文字・小文字それぞれ独自の候補セットを持つ。各候補には「元の文字そのまま」も含める。
 // PayPay / LTC / User / Amount / Link / Address 等カジノ非関連語には適用しないこと。
 
-const MAP: Record<string, string[]> = {
+const UPPER: Record<string, string[]> = {
   A: ['А', 'Α', 'À', 'Á', 'A'],
   B: ['Β', 'В', 'ß', 'B'],
   C: ['Ϲ', 'С', 'Ç', 'C'],
@@ -31,20 +31,48 @@ const MAP: Record<string, string[]> = {
   Z: ['Ζ', 'Ž', 'Z'],
 };
 
+const LOWER: Record<string, string[]> = {
+  a: ['а', 'à', 'á', 'a'],
+  b: ['b'],
+  c: ['с', 'c'],
+  d: ['d'],
+  e: ['е', 'è', 'é', 'e'],
+  f: ['ƒ', 'f'],
+  g: ['ğ', 'g'],
+  h: ['һ', 'h'],
+  i: ['і', 'ì', 'í', 'i'],
+  j: ['j'],
+  k: ['к', 'k'],
+  l: ['ł', 'ӏ', 'l'],
+  m: ['м', 'm'],
+  n: ['ñ', 'n'],
+  o: ['о', 'ò', 'ó', 'o'],
+  p: ['р', 'p'],
+  q: ['q'],
+  r: ['ř', 'r'],
+  s: ['ѕ', 'š', 's'],
+  t: ['т', 't'],
+  u: ['ü', 'ù', 'ú', 'u'],
+  v: ['v'],
+  w: ['w'],
+  x: ['х', 'x'],
+  y: ['у', 'y'],
+  z: ['ž', 'z'],
+};
+
 const pick = <T>(arr: T[]): T => arr[Math.floor(Math.random() * arr.length)];
 
-/** 文字列中のラテンアルファベットを定義した候補からランダム置換。小文字は大文字候補を小文字化。それ以外(日本語/数字/記号)はそのまま。 */
+/** ラテンアルファベットを定義した候補からランダム置換。日本語/数字/記号はそのまま。 */
 export function leet(s: string): string {
   let out = '';
   for (const ch of s) {
-    const upper = ch.toUpperCase();
-    const cands = MAP[upper];
-    if (!cands) { out += ch; continue; }
-    const r = pick(cands);
-    out += ch === upper ? r : r.toLowerCase();
+    const u = UPPER[ch];
+    if (u) { out += pick(u); continue; }
+    const l = LOWER[ch];
+    if (l) { out += pick(l); continue; }
+    out += ch;
   }
   return out;
 }
 
-/** 複数の語をまとめて置換する便利関数 */
 export const L = leet;
