@@ -1,7 +1,7 @@
 import { createCanvas, SKRSContext2D } from '@napi-rs/canvas';
 import type { CrapsState } from '../games/craps.js';
 
-const W = 420, H = 260;
+const W = 320, H = 140;
 
 function roundRect(ctx: SKRSContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
@@ -11,18 +11,18 @@ function roundRect(ctx: SKRSContext2D, x: number, y: number, w: number, h: numbe
 
 function drawDie(ctx: SKRSContext2D, x: number, y: number, size: number, value: number) {
   ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
+  ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
   const g = ctx.createLinearGradient(x, y, x, y + size);
-  g.addColorStop(0, '#f8f4ea'); g.addColorStop(1, '#d0c4a8');
+  g.addColorStop(0, '#fafafa'); g.addColorStop(1, '#d4d4d4');
   ctx.fillStyle = g;
   roundRect(ctx, x, y, size, size, size * 0.14); ctx.fill();
   ctx.restore();
-  ctx.strokeStyle = '#8a7a4a'; ctx.lineWidth = 1;
+  ctx.strokeStyle = '#a0a0a0'; ctx.lineWidth = 1;
   roundRect(ctx, x, y, size, size, size * 0.14); ctx.stroke();
 
   const pip = (dx: number, dy: number) => {
     ctx.beginPath();
-    ctx.fillStyle = '#5a1515';
+    ctx.fillStyle = '#111';
     ctx.arc(x + dx, y + dy, size * 0.075, 0, Math.PI*2); ctx.fill();
   };
   const c = size/2, lo = size*0.25, hi = size*0.75;
@@ -45,29 +45,29 @@ export async function renderCraps(i: CrapsRenderInput): Promise<Buffer> {
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext('2d');
 
-  // 暗背景
+  // Discord 暗背景のみ (フェルト撤去)
   ctx.fillStyle = '#2b2d31';
   ctx.fillRect(0, 0, W, H);
 
-  // 緑のフェルトのマット部分だけ (ダイス着地場所の演出)
-  const matX = 40, matY = 30, matW = W - 80, matH = H - 60;
-  const g = ctx.createRadialGradient(W/2, H/2, 20, W/2, H/2, 260);
-  g.addColorStop(0, '#0d5a3a'); g.addColorStop(1, '#042416');
-  ctx.fillStyle = g;
-  roundRect(ctx, matX, matY, matW, matH, 12); ctx.fill();
-  ctx.strokeStyle = '#c9a44a'; ctx.lineWidth = 2;
-  roundRect(ctx, matX, matY, matW, matH, 12); ctx.stroke();
-
-  const dieSize = 80;
+  const dieSize = 90;
   const cx = W/2;
-  const cy = H/2 - 10;
+  const cy = H/2;
 
   if (i.state.lastRoll) {
-    drawDie(ctx, cx - dieSize - 15, cy - dieSize/2, dieSize, i.state.lastRoll[0]);
-    drawDie(ctx, cx + 15,            cy - dieSize/2, dieSize, i.state.lastRoll[1]);
+    // 2つのダイスを少し離して、わずかに角度違いで散らす
+    ctx.save();
+    ctx.translate(cx - dieSize/2 - 12, cy);
+    ctx.rotate(-0.05);
+    drawDie(ctx, -dieSize/2, -dieSize/2, dieSize, i.state.lastRoll[0]);
+    ctx.restore();
+    ctx.save();
+    ctx.translate(cx + dieSize/2 + 12, cy);
+    ctx.rotate(0.07);
+    drawDie(ctx, -dieSize/2, -dieSize/2, dieSize, i.state.lastRoll[1]);
+    ctx.restore();
   } else {
-    ctx.fillStyle = '#9ca3af'; ctx.font = 'italic 16px sans-serif';
-    ctx.textAlign = 'center';
+    ctx.fillStyle = '#6b7280'; ctx.font = 'italic 14px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText('— まだ振られていません —', cx, cy);
   }
 

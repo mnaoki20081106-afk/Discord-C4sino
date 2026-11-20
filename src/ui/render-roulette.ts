@@ -22,11 +22,12 @@ export function renderRoulette(i: RouletteRenderInput): Promise<Buffer> {
   const n = WHEEL.length;
   const seg = (Math.PI * 2) / n;
 
-  // 木目調の外周リング
-  ctx.fillStyle = '#3d1f0a';
-  ctx.beginPath(); ctx.arc(cx, cy, R + 14, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = '#c9a44a'; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.arc(cx, cy, R + 14, 0, Math.PI*2); ctx.stroke();
+  // 影のみ (木目は撤去、clean)
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 20; ctx.shadowOffsetY = 6;
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath(); ctx.arc(cx, cy, R + 6, 0, Math.PI*2); ctx.fill();
+  ctx.restore();
 
   // セクタ
   for (let k = 0; k < n; k++) {

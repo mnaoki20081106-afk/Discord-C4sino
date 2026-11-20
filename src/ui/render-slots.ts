@@ -1,7 +1,7 @@
 import { createCanvas, SKRSContext2D } from '@napi-rs/canvas';
 import type { Symbol as SlotSym } from '../games/slots.js';
 
-const W = 560, H = 320;
+const W = 460, H = 260;
 
 function roundRect(ctx: SKRSContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
@@ -20,64 +20,55 @@ export interface RenderSlotsInput {
   label?: string;
 }
 
-/** リール 3 本だけを描く。背景は Discord の暗色に馴染ませる。 */
+/** 暗背景にリール 3 本だけ。シンプル。 */
 export async function renderSlots(i: RenderSlotsInput): Promise<Buffer> {
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext('2d');
 
-  // 背景: 黒ベース
   ctx.fillStyle = '#2b2d31';
   ctx.fillRect(0, 0, W, H);
 
-  // 筐体パネル (深紅 + 金枠)
-  const panelX = 20, panelY = 20;
-  const panelW = W - 40, panelH = H - 40;
-  const gradBG = ctx.createLinearGradient(0, panelY, 0, panelY + panelH);
-  gradBG.addColorStop(0, '#2a0808');
-  gradBG.addColorStop(1, '#100000');
-  ctx.fillStyle = gradBG;
-  roundRect(ctx, panelX, panelY, panelW, panelH, 14); ctx.fill();
-  ctx.strokeStyle = '#c9a44a'; ctx.lineWidth = 2;
-  roundRect(ctx, panelX, panelY, panelW, panelH, 14); ctx.stroke();
-
-  // リール窓
-  const reelW = 140, reelH = 240, gap = 16;
+  const reelW = 120, reelH = 200, gap = 18;
   const totalW = reelW*3 + gap*2;
   const startX = (W - totalW)/2;
-  const reelY = 40;
+  const reelY = (H - reelH)/2;
 
   for (let r = 0; r < 3; r++) {
     const x = startX + r*(reelW+gap);
 
-    // リール背景 (深黒)
-    ctx.fillStyle = '#050505';
+    // 白リール窓 (トランプのような清潔感)
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.5)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 4;
+    ctx.fillStyle = '#fafafa';
     roundRect(ctx, x, reelY, reelW, reelH, 10); ctx.fill();
-    ctx.strokeStyle = '#c9a44a'; ctx.lineWidth = 1.5;
+    ctx.restore();
+    ctx.strokeStyle = '#d0d0d0'; ctx.lineWidth = 1;
     roundRect(ctx, x, reelY, reelW, reelH, 10); ctx.stroke();
 
-    // 上下シンボル (薄)
+    // 上下シンボル (薄グレー)
     const above = i.above?.[r];
     const below = i.below?.[r];
     const main  = i.reels[r];
 
-    ctx.font = '72px serif';
+    ctx.font = '60px serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    if (above) { ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.fillText(above.id, x+reelW/2, reelY + 44); }
-    if (below) { ctx.fillStyle = 'rgba(255,255,255,0.22)'; ctx.fillText(below.id, x+reelW/2, reelY + reelH - 44); }
+    if (above) { ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillText(above.id, x+reelW/2, reelY + 36); }
+    if (below) { ctx.fillStyle = 'rgba(0,0,0,0.12)'; ctx.fillText(below.id, x+reelW/2, reelY + reelH - 36); }
 
-    // メインシンボル
-    ctx.fillStyle = '#fff';
+    // メイン
+    ctx.fillStyle = '#111';
     ctx.fillText(main.id, x+reelW/2, reelY + reelH/2);
 
-    // ペイライン
-    ctx.strokeStyle = i.payoutMult > 0 && !i.spinning ? '#f6c84c' : 'rgba(201,164,74,0.3)';
-    ctx.lineWidth = i.payoutMult > 0 && !i.spinning ? 3 : 1;
-    ctx.beginPath();
-    ctx.moveTo(x+6, reelY + reelH/2);
-    ctx.lineTo(x+reelW-6, reelY + reelH/2);
-    ctx.stroke();
+    // 当選時の金ペイライン
+    if (i.payoutMult > 0 && !i.spinning) {
+      ctx.strokeStyle = '#c9a44a'; ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(x+6, reelY + reelH/2);
+      ctx.lineTo(x+reelW-6, reelY + reelH/2);
+      ctx.stroke();
+    }
   }
 
   return canvas.encode('png');
