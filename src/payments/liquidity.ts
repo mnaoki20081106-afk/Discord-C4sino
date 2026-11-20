@@ -102,10 +102,9 @@ export async function assertBetAffordable(game: GameMultKey, bet: number, overri
   const mult = overrideMult ?? MAX_GROSS_MULT[game];
   const maxPay = bet * mult;
   if (maxPay > effective) {
+    const cap = Math.max(0, Math.floor(effective / mult));
     throw new Error(
-      `このベット額では最大 **${maxPay.toLocaleString()}** の払戻しが発生する可能性がありますが、` +
-      `運営の支払可能残高は **${Math.max(0,effective).toLocaleString()}** です。\n` +
-      `上限 BET: **${Math.max(0, Math.floor(effective / mult)).toLocaleString()}** まで。`
+      `現在このテーブルの BET 上限は **${cap.toLocaleString()}** です。この額以下で再度お試しください。`
     );
   }
 }
@@ -118,9 +117,7 @@ export async function assertCrapsBetAffordable(sessionId: string, existingExposu
   const effective  = liq.total - outstanding - otherExp - existingExposure;
   if (newBetMaxGross > effective) {
     throw new Error(
-      `このベットで最大 **${newBetMaxGross.toLocaleString()}** の追加払戻し可能性が出ますが、` +
-      `残り支払可能残高は **${Math.max(0,effective).toLocaleString()}** です。` +
-      `(自セッション既存露出 ${existingExposure.toLocaleString()}, 他セッション ${otherExp.toLocaleString()})`
+      `現在このテーブルで追加できる BET 上限を超えています。少額に変更するか、既存のベットを決着させてから再度お試しください。`
     );
   }
 }

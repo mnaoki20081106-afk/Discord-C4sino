@@ -380,7 +380,7 @@ async function startBJ(i: ButtonInteraction | ModalSubmitInteraction, bet: numbe
   if (bet < 10 || bet > 50000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
   try { await assertBetAffordable('blackjack', bet); }
-  catch (e) { return i.reply({ content: `🏦 ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
+  catch (e) { return i.reply({ content: `⚠️ ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
   txCredit(i.user.id, -bet, 'bet:blackjack');
   const st = startHand(bet, newShoe());
   const entry = sessions.create(i.user.id, 'blackjack', st, bet);
@@ -478,7 +478,7 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
   if (bet < 10 || bet > 10000) return i.reply({ content: `${L('BET')} は 10 〜 10,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
   try { await assertBetAffordable('slots', bet); }
-  catch (e) { return i.reply({ content: `🏦 ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
+  catch (e) { return i.reply({ content: `⚠️ ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
   txCredit(i.user.id, -bet, 'bet:slots');
 
   const result = spin();
@@ -563,7 +563,7 @@ async function doRouletteSpin(
   if (kind === 'number' && (number === undefined || number < 0 || number > 36))
     return i.reply({ content: '数字は 0 〜 36 です', flags: MessageFlags.Ephemeral });
   try { await assertBetAffordable('roulette', bet); }
-  catch (e) { return i.reply({ content: `🏦 ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
+  catch (e) { return i.reply({ content: `⚠️ ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
   txCredit(i.user.id, -bet, 'bet:roulette');
 
   const result = spinRoulette();
@@ -700,7 +700,7 @@ async function placeCrapsBet(i: ModalSubmitInteraction, sid: string, kind: Craps
   const existing = openExposure(st);
   const newMax = amount * CRAPS_MULT[kind];
   try { await assertCrapsBetAffordable(sid, existing, newMax); }
-  catch (e) { return i.reply({ content: `🏦 ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
+  catch (e) { return i.reply({ content: `⚠️ ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
 
   txCredit(i.user.id, -amount, `bet:craps:${kind}`, sid);
   addBet(st, kind, amount);
@@ -784,7 +784,7 @@ async function doBaccarat(i: ModalSubmitInteraction, side: BacSide, bet: number)
   if (bet < 10 || bet > 50_000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
   try { await assertBetAffordable('baccarat', bet); }
-  catch (e) { return i.reply({ content: `🏦 ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
+  catch (e) { return i.reply({ content: `⚠️ ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
   txCredit(i.user.id, -bet, 'bet:baccarat');
 
   const r = dealBaccarat();
@@ -850,7 +850,7 @@ async function startVpSession(i: ButtonInteraction | ModalSubmitInteraction, bet
   if (bet < 10 || bet > 50_000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
   try { await assertBetAffordable('videopoker', bet); }
-  catch (e) { return i.reply({ content: `🏦 ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
+  catch (e) { return i.reply({ content: `⚠️ ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
   txCredit(i.user.id, -bet, 'bet:videopoker');
 
   const st = startVP();
