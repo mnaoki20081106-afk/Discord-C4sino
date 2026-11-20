@@ -58,6 +58,10 @@ export const linkCheck = (code: string, access_token?: string) =>
 export const linkReceive = (access_token: string, code: string, passcode?: string) =>
   call<{ ok: true; amount: number; order_id: string }>('/link/receive', { access_token, code, passcode });
 
+export interface CreatedLink { link: string; chat_room_id: string; order_id: string; }
+export const createLink = (access_token: string, amount: number, passcode?: string) =>
+  call<CreatedLink>('/wallet/create_link', { access_token, amount, passcode });
+
 export const alive = (access_token: string) =>
   call<{ ok: true }>('/alive', { access_token });
 

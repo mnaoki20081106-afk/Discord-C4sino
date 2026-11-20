@@ -219,6 +219,27 @@ def link_receive():
     return jsonify({"ok": True, "amount": info.amount, "order_id": info.order_id})
 
 
+@app.post("/wallet/create_link")
+def wallet_create_link():
+    j = request.get_json(force=True)
+    at = j.get("access_token")
+    amount = j.get("amount")
+    passcode = j.get("passcode")
+    if not at or amount is None:
+        return _err("access_token/amount required")
+    try:
+        link = _from_token(at).create_link(amount=int(amount), passcode=passcode)
+    except PayPayLoginError as e:
+        return _err(f"login_error: {e}", 401)
+    except PayPayError as e:
+        return _err(f"paypay_error: {e}", 500)
+    return jsonify({
+        "link":        link.link,
+        "chat_room_id":link.chat_room_id,
+        "order_id":    link.order_id,
+    })
+
+
 @app.post("/alive")
 def alive():
     j = request.get_json(force=True)

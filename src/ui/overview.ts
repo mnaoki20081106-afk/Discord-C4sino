@@ -1,6 +1,6 @@
 import { EmbedBuilder } from 'discord.js';
 import { SYMBOLS } from '../games/slots.js';
-import { MIN_DEPOSIT_JPY, MIN_BET_CHIPS, MAX_BET_CHIPS } from '../payments/limits.js';
+import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY, MIN_BET_CHIPS, MAX_BET_CHIPS, LTC_NETWORK_FEE_JPY } from '../payments/limits.js';
 import { L } from './leet.js';
 
 export type GameKey = 'blackjack' | 'slots' | 'roulette' | 'baccarat' | 'videopoker' | 'craps' | 'cashier' | 'all';
@@ -211,25 +211,29 @@ export function crapsOverview(): EmbedBuilder {
 
 export function cashierOverview(): EmbedBuilder {
   return new EmbedBuilder()
-    .setTitle('💵  CASHIER — 入金について')
+    .setTitle('💵  CASHIER — 入出金について')
     .setColor(0xd4af37)
-    .setDescription('対応支払い方法と、入金から反映までの流れです。')
+    .setDescription('**1 chip = ¥1 の内部通貨**。入金で発行、出金で焼却。')
     .addFields(
-      { name: '💴 PayPay (送金リンク)',
+      { name: '📥 PayPay 入金',
         value:
-          `最低入金額: **¥${MIN_DEPOSIT_JPY.paypay.toLocaleString()}**\n` +
-          'PayPay アプリで発行した送金リンクを Cashier パネルに貼り付けると、' +
-          'Bot が自動で受領して即チップ加算。パスコード付きリンクも対応。',
+          `最低 **¥${MIN_DEPOSIT_JPY.paypay.toLocaleString()}** / 即チャージ\n` +
+          'PayPay アプリで発行した送金リンクを貼るだけで Bot が自動受領。',
         inline: false },
-      { name: '💠 LTC (Litecoin)',
+      { name: '📥 LTC 入金',
         value:
-          `最低入金額: **¥${MIN_DEPOSIT_JPY.ltc.toLocaleString()}**\n` +
-          '専用アドレスを発行し、送金すると 1 承認で自動チャージ。' +
-          '希望 JPY 額を入力すると現在レートで必要 LTC を計算します。',
+          `最低 **¥${MIN_DEPOSIT_JPY.ltc.toLocaleString()}** / 1 承認 (2-5分)\n` +
+          '専用アドレス発行、送金後に自動チャージ。CoinGecko レート換算。',
         inline: false },
-      { name: '💱 レート', value: '1 JPY = 1 chip  /  LTC は CoinGecko の現在レートで JPY 換算', inline: false },
-      { name: '⏱️ 反映時間',
-        value: 'PayPay: 送信直後 / LTC: 約 2〜5 分 (1 承認後)',
+      { name: '📤 PayPay 出金',
+        value:
+          `最低 **¥${MIN_WITHDRAW_JPY.paypay.toLocaleString()}** / 手数料 **無料** / 即時\n` +
+          'Bot が送金リンクを生成し、DM で送信します。パスコード設定可。',
+        inline: false },
+      { name: '📤 LTC 出金',
+        value:
+          `最低 **¥${MIN_WITHDRAW_JPY.ltc.toLocaleString()}** / 手数料 ¥${LTC_NETWORK_FEE_JPY}\n` +
+          '任意の LTC アドレスへ送金。管理者承認後、ネットワーク反映は数分〜十数分。',
         inline: false },
     )
     .setFooter({ text: 'Discord C4sino · Cashier Overview' });

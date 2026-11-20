@@ -24,7 +24,8 @@ import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
 import { housePayoutCap, clampPayout, setCrapsExposure, clearCrapsExposure, invalidateLiquidityCache, maxAffordableBet } from './payments/liquidity.js';
-import { MIN_DEPOSIT_JPY } from './payments/limits.js';
+import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY } from './payments/limits.js';
+import * as withdraw from './payments/withdraw.js';
 import { L } from './ui/leet.js';
 import { gameOverview, type GameKey } from './ui/overview.js';
 import * as ach from './achievements.js';
@@ -78,8 +79,16 @@ async function onCommand(i: ChatInputCommandInteraction) {
     case 'wallet':   return cmdWallet(i);
     case 'admin':    return cmdAdmin(i);
     case 'pay':      return cmdPay(i);
+    case 'withdraw': return cmdWithdraw(i);
     case 'overview': return cmdOverview(i);
   }
+}
+
+async function cmdWithdraw(i: ChatInputCommandInteraction) {
+  assertNotBanned(i.user.id);
+  const method = i.options.getString('method', true) as 'paypay' | 'ltc';
+  if (method === 'paypay') return openPaypayWithdrawModal(i);
+  return openLtcWithdrawModal(i);
 }
 
 async function cmdOverview(i: ChatInputCommandInteraction) {
@@ -313,9 +322,36 @@ async function onButton(i: ButtonInteraction) {
   if (ns === 'cr')   return onCrapsButton(i, kind, arg);
   if (ns === 'dep') return onDepositButton(i, kind, arg);
   if (ns === 'adm') return onAdminButton(i, kind);
+  if (ns === 'wd' && (kind === 'approve' || kind === 'reject')) return onWithdrawAdmin(i, kind, arg);
   if (ns === 'bal') {
     const bal = getBalance(i.user.id);
     return i.reply({ content: `💰 残高: **${bal.toLocaleString()} ${L('chips')}**`, flags: MessageFlags.Ephemeral });
+  }
+}
+
+async function onWithdrawAdmin(i: ButtonInteraction, kind: string, arg: string) {
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+    return i.reply({ content: '権限不足', flags: MessageFlags.Ephemeral });
+  const id = parseInt(arg, 10);
+  if (kind === 'approve') {
+    const modal = new ModalBuilder().setCustomId(`wd:approve:${id}`).setTitle(`LTC 出金 #${id} — Mark Sent`)
+      .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId('txid').setLabel('LTC Transaction ID (txid)').setStyle(TextInputStyle.Short).setRequired(true)
+      ));
+    return i.showModal(modal);
+  }
+  if (kind === 'reject') {
+    try {
+      const w = withdraw.rejectWithdrawal(id, 'rejected by admin');
+      await i.update({
+        components: [],
+        embeds: [EmbedBuilder.from(i.message.embeds[0]).setColor(0xef4444).setTitle('❌ Rejected (返金済み)')],
+      });
+      const user = await client.users.fetch(w.discord_id).catch(() => null);
+      await user?.send(`❌ LTC 出金 #${id} は却下されました。chip を返金しました。`).catch(()=>{});
+    } catch (e: any) {
+      await i.reply({ content: `❌ ${e.message}`, flags: MessageFlags.Ephemeral });
+    }
   }
 }
 
@@ -902,6 +938,31 @@ async function updateVpMessage(i: ButtonInteraction, sid: string, bet: number, s
   await i.update({ embeds: [embed], files: [file], components: rows, attachments: [] });
 }
 
+/* ────────────── CASHIER (ユーザー出金) ────────────── */
+
+async function openPaypayWithdrawModal(i: ButtonInteraction | StringSelectMenuInteraction | ChatInputCommandInteraction) {
+  const modal = new ModalBuilder().setCustomId('wd:paypay').setTitle('PayPay 出金')
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId('amt').setLabel(`金額 (¥${MIN_WITHDRAW_JPY.paypay}〜 chip)`).setStyle(TextInputStyle.Short).setRequired(true)),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId('pin').setLabel('リンクのパスコード (4桁, 任意)').setStyle(TextInputStyle.Short).setRequired(false)
+          .setMinLength(4).setMaxLength(4)),
+    );
+  await i.showModal(modal);
+}
+
+async function openLtcWithdrawModal(i: ButtonInteraction | StringSelectMenuInteraction | ChatInputCommandInteraction) {
+  const modal = new ModalBuilder().setCustomId('wd:ltc').setTitle('LTC 出金')
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId('amt').setLabel(`金額 (¥${MIN_WITHDRAW_JPY.ltc}〜 chip)`).setStyle(TextInputStyle.Short).setRequired(true)),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId('addr').setLabel('あなたの LTC 受取アドレス').setStyle(TextInputStyle.Short).setRequired(true)),
+    );
+  await i.showModal(modal);
+}
+
 /* ────────────── CASHIER (ユーザー入金) ────────────── */
 
 async function onDepositButton(i: ButtonInteraction, kind: string, _arg: string) {
@@ -916,6 +977,12 @@ async function onSelect(i: StringSelectMenuInteraction) {
     const choice = i.values[0];
     if (choice === 'paypay') return openPaypayDepositModal(i);
     if (choice === 'ltc')    return showLtcAddress(i);
+  }
+  if (i.customId === 'wd:method') {
+    assertNotBanned(i.user.id);
+    const choice = i.values[0];
+    if (choice === 'paypay') return openPaypayWithdrawModal(i);
+    if (choice === 'ltc')    return openLtcWithdrawModal(i);
   }
   if (i.customId === 'cr:add') {
     assertNotBanned(i.user.id);
@@ -1071,6 +1138,52 @@ async function onModal(i: ModalSubmitInteraction) {
     const raw = i.fields.getTextInputValue('jpy').replace(/[,\s¥]/g, '');
     const jpy = raw === '' ? null : parseInt(raw, 10);
     return replyLtcQuote(i, jpy);
+  }
+  if (i.customId.startsWith('wd:approve:')) {
+    if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+      return i.reply({ content: '権限不足', flags: MessageFlags.Ephemeral });
+    const id = parseInt(i.customId.split(':')[2], 10);
+    const txid = i.fields.getTextInputValue('txid').trim();
+    try {
+      const w = withdraw.markLtcSent(id, txid);
+      await i.reply({ content: `✅ LTC 出金 #${id} 完了 (txid=${txid.slice(0,16)}…)`, flags: MessageFlags.Ephemeral });
+      const user = await client.users.fetch(w.discord_id).catch(() => null);
+      await user?.send(`✅ LTC 出金 #${id} 送信完了。\ntxid: \`${txid}\``).catch(()=>{});
+    } catch (e: any) {
+      await i.reply({ content: `❌ ${e.message}`, flags: MessageFlags.Ephemeral });
+    }
+    return;
+  }
+  if (i.customId === 'wd:paypay') {
+    assertNotBanned(i.user.id);
+    const amt = parseInt(i.fields.getTextInputValue('amt').replace(/[,\s¥]/g, ''), 10);
+    const pin = i.fields.getTextInputValue('pin').trim() || undefined;
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const r = await withdraw.withdrawPayPay(client, { discordId: i.user.id, method: 'paypay', amountJpy: amt, passcode: pin });
+      invalidateLiquidityCache();
+      await i.editReply(`✅ PayPay 出金 #${r.id} 受付完了。送金リンクを DM 送信しました。`);
+    } catch (e: any) {
+      await i.editReply(`❌ ${e.message}`);
+    }
+  }
+  if (i.customId === 'wd:ltc') {
+    assertNotBanned(i.user.id);
+    const amt  = parseInt(i.fields.getTextInputValue('amt').replace(/[,\s¥]/g, ''), 10);
+    const addr = i.fields.getTextInputValue('addr').trim();
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const adminCh = i.guildId ? getAdminChannel(i.guildId) : null;
+      const r = await withdraw.withdrawLtc(client, adminCh, { discordId: i.user.id, method: 'ltc', amountJpy: amt, dest: addr });
+      invalidateLiquidityCache();
+      await i.editReply(
+        `✅ LTC 出金 #${r.id} 受付完了。\n` +
+        `送信予定: **${r.ltcAmount} LTC** → \`${addr}\`\n` +
+        `管理者が実送金次第、DM で txid を通知します。`
+      );
+    } catch (e: any) {
+      await i.editReply(`❌ ${e.message}`);
+    }
   }
   if (i.customId === 'dep:paypay') {
     assertNotBanned(i.user.id);

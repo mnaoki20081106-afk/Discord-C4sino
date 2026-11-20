@@ -98,6 +98,27 @@ CREATE TABLE IF NOT EXISTS user_bans (
   banned_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 
+-- 出金記録
+CREATE TABLE IF NOT EXISTS withdrawals (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  discord_id   TEXT NOT NULL,
+  method       TEXT NOT NULL CHECK(method IN ('paypay','ltc')),
+  amount_jpy   INTEGER NOT NULL,            -- ユーザーに返す金額 (手数料控除前)
+  fee_jpy      INTEGER NOT NULL DEFAULT 0,  -- LTC は手数料を控除
+  net_jpy      INTEGER NOT NULL,            -- 実際に届く金額
+  dest         TEXT,                         -- LTC アドレス or null
+  passcode     TEXT,                         -- PayPay パスコード
+  link_url     TEXT,                         -- PayPay 送金リンク
+  tx_ref       TEXT,                         -- order_id or LTC txid
+  wallet_id    INTEGER,
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed','cancelled')),
+  reason       TEXT,
+  created_at   INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  completed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_withdrawals_user   ON withdrawals(discord_id, status);
+CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals(status);
+
 -- 実績 (当選記録)
 CREATE TABLE IF NOT EXISTS achievements (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -45,6 +45,15 @@ const pay = new SlashCommandBuilder()
     ))
   .addIntegerOption(o => o.setName('amount').setDescription('(LTCのみ) 入金希望額 JPY. 省略時は見積りなしでアドレスのみ').setRequired(false));
 
+const withdraw = new SlashCommandBuilder()
+  .setName('withdraw')
+  .setDescription('出金 — chip を PayPay または LTC で引き出す')
+  .addStringOption(o => o.setName('method').setDescription('出金方法').setRequired(true)
+    .addChoices(
+      { name: 'PayPay (手数料無料, ¥1〜)', value: 'paypay' },
+      { name: 'LTC (手数料あり, ¥1,000〜)', value: 'ltc' },
+    ));
+
 const wallet = new SlashCommandBuilder()
   .setName('wallet')
   .setDescription('カジノ運営ウォレット管理 (管理者)')
@@ -87,7 +96,7 @@ const admin = new SlashCommandBuilder()
     .addChannelOption(o => o.setName('channel').setDescription('設定するチャンネル (空で解除)').setRequired(false))
     .addStringOption(o => o.setName('base').setDescription('チャンネル名のベース (例: 実績 → 実績-実績12件)').setRequired(false)));
 
-const commands = [setup, balance, overview, pay, wallet, admin].map(c => c.toJSON());
+const commands = [setup, balance, overview, pay, withdraw, wallet, admin].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN!);
 const clientId = process.env.DISCORD_CLIENT_ID!;

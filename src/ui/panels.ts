@@ -1,5 +1,6 @@
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } from 'discord.js';
 import { L } from './leet.js';
+import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY } from '../payments/limits.js';
 
 export function blackjackPanel() {
   const embed = new EmbedBuilder()
@@ -214,30 +215,43 @@ export function crapsControlRows(state: { phase: 'comeout'|'point'; point?: numb
 export function depositPanel() {
   const embed = new EmbedBuilder()
     .setTitle(`💵  ${L('CASHIER')}  💵`)
-    .setDescription('**支払い方法を選択してください。**\n選んだ方法でチップを購入できます。')
+    .setDescription(`**1 ${L('chip')} = ¥1 の内部通貨**。入金で発行、出金で焼却。`)
     .setColor(0xd4af37)
     .addFields(
-      { name: '💴 PayPay', value: '送金リンクを貼るだけで即チップに変換（自動受領）', inline: false },
-      { name: '💠 LTC',    value: '専用アドレスを発行、1承認で自動チャージ', inline: false },
-      { name: L('Rate'),   value: `1 JPY = 1 ${L('chip')}  /  LTC は CoinGecko レートで JPY 換算`, inline: false },
+      { name: '📥 入金', value:
+        `💴 **PayPay** 送金リンクを貼るだけで即 chip 加算 (¥${MIN_DEPOSIT_JPY.paypay}〜)\n` +
+        `💠 **LTC**   アドレスを発行、1 承認で自動チャージ (¥${MIN_DEPOSIT_JPY.ltc}〜)`,
+        inline: false },
+      { name: '📤 出金', value:
+        `💴 **PayPay** 手数料ゼロ・自動送金 (¥${MIN_WITHDRAW_JPY.paypay}〜)\n` +
+        `💠 **LTC**   自分のアドレス指定・ネットワーク手数料あり (¥${MIN_WITHDRAW_JPY.ltc}〜)`,
+        inline: false },
+      { name: L('Rate'), value: `LTC は CoinGecko の現在レートで JPY 換算`, inline: false },
     )
     .setFooter({ text: 'Discord C4sino · Cashier' });
 
-  const select = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+  const depSelect = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId('dep:method')
-      .setPlaceholder('🔽 支払い方法を選択…')
+      .setPlaceholder('📥 入金方法を選択…')
       .addOptions(
         { label: 'PayPay 送金リンクで入金', value: 'paypay', description: '送金リンク URL / ID を貼り付け', emoji: '💴' },
         { label: 'LTC で入金',               value: 'ltc',    description: '専用アドレスを発行、送金後に自動チャージ', emoji: '💠' },
       )
   );
+  const wdSelect = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId('wd:method')
+      .setPlaceholder('📤 出金方法を選択…')
+      .addOptions(
+        { label: 'PayPay で出金', value: 'paypay', description: '送金リンクを DM で受取 (手数料無料)', emoji: '💴' },
+        { label: 'LTC で出金',    value: 'ltc',    description: '任意の LTC アドレスへ送金 (手数料あり)', emoji: '💠' },
+      )
+  );
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('dep:paypay').setLabel('PayPay').setEmoji('💴').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('dep:ltc').setLabel('LTC').setEmoji('💠').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Success),
   );
-  return { embeds: [embed], components: [select, row] };
+  return { embeds: [embed], components: [depSelect, wdSelect, row] };
 }
 
 export function bjActionsRow(actions: string[]): ActionRowBuilder<ButtonBuilder> {
