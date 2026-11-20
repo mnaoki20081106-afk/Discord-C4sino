@@ -5,7 +5,7 @@ import { L } from './ui/leet.js';
 export interface AchievementRecord {
   guildId: string;
   discordId: string;
-  game: 'blackjack' | 'slots' | 'roulette';
+  game: 'blackjack' | 'slots' | 'roulette' | 'baccarat' | 'videopoker';
   bet: number;
   payout: number;
   net: number;
@@ -15,11 +15,15 @@ const GAME_LABEL: Record<string, string> = {
   blackjack: 'Blackjack',
   slots:     'Slots',
   roulette:  'Roulette',
+  baccarat:  'Baccarat',
+  videopoker:'Video Poker',
 };
 const GAME_EMOJI: Record<string, string> = {
   blackjack: '🂡',
   slots:     '🎰',
   roulette:  '🎡',
+  baccarat:  '🎴',
+  videopoker:'🃏',
 };
 
 export function countAchievements(guildId: string): number {
@@ -91,9 +95,11 @@ export async function announce(client: Client, a: AchievementRecord): Promise<vo
 
   const mult = a.bet > 0 ? a.payout / a.bet : 0;
   const tier =
-    a.game === 'slots'    ? (mult >= 2000 ? 'JACKPOT' : mult >= 200 ? 'BIG WIN' : 'WIN')
-  : a.game === 'roulette' ? (mult >= 30   ? 'BIG WIN' : 'WIN')
-  :                         (a.net >= a.bet * 4 ? 'BIG WIN' : 'WIN');
+    a.game === 'slots'     ? (mult >= 2000 ? 'JACKPOT' : mult >= 200 ? 'BIG WIN' : 'WIN')
+  : a.game === 'roulette'  ? (mult >= 30   ? 'BIG WIN' : 'WIN')
+  : a.game === 'videopoker'? (mult >= 500  ? 'JACKPOT' : mult >= 20 ? 'BIG WIN' : 'WIN')
+  : a.game === 'baccarat'  ? (mult >= 8    ? 'BIG WIN' : 'WIN')
+  :                          (a.net >= a.bet * 4 ? 'BIG WIN' : 'WIN');
   const color = tier === 'JACKPOT' ? 0xffd93d : tier === 'BIG WIN' ? 0xf59e0b : 0x22c55e;
 
   const embed = new EmbedBuilder()

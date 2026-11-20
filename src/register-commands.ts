@@ -6,9 +6,11 @@ const setup = new SlashCommandBuilder()
   .setDescription('このチャンネルにカジノパネルを設置')
   .addStringOption(o => o.setName('game').setDescription('ゲーム').setRequired(true)
     .addChoices(
-      { name: 'Blackjack', value: 'blackjack' },
-      { name: 'Slots',     value: 'slots' },
-      { name: 'Roulette',  value: 'roulette' },
+      { name: 'Blackjack',   value: 'blackjack' },
+      { name: 'Slots',       value: 'slots' },
+      { name: 'Roulette',    value: 'roulette' },
+      { name: 'Baccarat',    value: 'baccarat' },
+      { name: 'Video Poker', value: 'videopoker' },
       { name: 'Cashier (入金)', value: 'cashier' },
     ));
 
@@ -26,6 +28,8 @@ const overview = new SlashCommandBuilder()
       { name: 'Blackjack',             value: 'blackjack' },
       { name: 'Slots',                 value: 'slots' },
       { name: 'Roulette',              value: 'roulette' },
+      { name: 'Baccarat',              value: 'baccarat' },
+      { name: 'Video Poker',           value: 'videopoker' },
       { name: 'Cashier (入金について)', value: 'cashier' },
     ));
 

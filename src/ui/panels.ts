@@ -82,6 +82,66 @@ export function roulettePanel() {
   return { embeds: [embed], components: [row1, row2, row3] };
 }
 
+export function baccaratPanel() {
+  const embed = new EmbedBuilder()
+    .setTitle(`🎴  ${L('BACCARAT')}  🎴`)
+    .setDescription('Punto Banco ルール。3 つのベット対象から選んで配牌結果を競う。')
+    .setColor(0x0d5a3a)
+    .addFields(
+      { name: L('Pays'), value:
+        `${L('Player')}: **×2.0**  (House edge 1.24%)\n` +
+        `${L('Banker')}: **×1.95**  (5% コミ・House edge 1.06%)\n` +
+        `${L('Tie')}: **×9.0**  (House edge 14.4%)`,
+        inline: false },
+      { name: L('Bet'), value: `10 〜 50,000 ${L('chips')}`, inline: true },
+    )
+    .setFooter({ text: 'Discord C4sino · Baccarat' });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('bac:side:player').setLabel('👤 PLAYER ×2').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('bac:side:banker').setLabel('🏦 BANKER ×1.95').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('bac:side:tie').setLabel('🤝 TIE ×9').setStyle(ButtonStyle.Success),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
+export function videopokerPanel() {
+  const embed = new EmbedBuilder()
+    .setTitle(`🃏  ${L('VIDEO POKER')} — ${L('JACKS OR BETTER')}  🃏`)
+    .setDescription('5 枚の手札を見て、残したいカードを HOLD、[DRAW] で引き直し。役を作って勝利。')
+    .setColor(0x2d0a4e)
+    .addFields(
+      { name: L('Pays'), value:
+        '`Royal Flush  ×800` · `Straight Flush  ×50` · `Four of a Kind  ×25`\n' +
+        '`Full House   ×9`  · `Flush          ×6`  · `Straight       ×4`\n' +
+        '`3 of a Kind  ×3`  · `Two Pair       ×2`  · `Jacks or Better ×1`',
+        inline: false },
+      { name: 'RTP', value: '≈ 99.54% (9/6 Jacks, 最適プレイ時)', inline: true },
+    )
+    .setFooter({ text: 'Discord C4sino · Video Poker' });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('vp:deal:100').setLabel(`DEAL 100`).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('vp:deal:500').setLabel(`DEAL 500`).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('vp:deal:1000').setLabel(`DEAL 1,000`).setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('vp:deal:5000').setLabel(`DEAL 5,000`).setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('vp:deal:custom').setLabel('CUSTOM').setStyle(ButtonStyle.Success),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
+export function vpHoldRow(held: boolean[]): ActionRowBuilder<ButtonBuilder>[] {
+  const row1 = new ActionRowBuilder<ButtonBuilder>();
+  for (let i = 0; i < 5; i++) {
+    row1.addComponents(new ButtonBuilder()
+      .setCustomId(`vp:hold:${i}`)
+      .setLabel(`${i+1} ${held[i] ? 'HELD' : 'HOLD'}`)
+      .setStyle(held[i] ? ButtonStyle.Success : ButtonStyle.Secondary));
+  }
+  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('vp:draw').setLabel('🎴 DRAW').setStyle(ButtonStyle.Primary),
+  );
+  return [row1, row2];
+}
+
 export function depositPanel() {
   const embed = new EmbedBuilder()
     .setTitle(`💵  ${L('CASHIER')}  💵`)

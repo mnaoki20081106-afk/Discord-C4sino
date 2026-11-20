@@ -3,7 +3,7 @@ import { SYMBOLS } from '../games/slots.js';
 import { MIN_DEPOSIT_JPY, MIN_BET_CHIPS, MAX_BET_CHIPS } from '../payments/limits.js';
 import { L } from './leet.js';
 
-export type GameKey = 'blackjack' | 'slots' | 'roulette' | 'cashier' | 'all';
+export type GameKey = 'blackjack' | 'slots' | 'roulette' | 'baccarat' | 'videopoker' | 'cashier' | 'all';
 
 /** スロットの実 RTP を重みから計算 */
 export function computeSlotsRTP() {
@@ -129,6 +129,55 @@ export function rouletteOverview(): EmbedBuilder {
     .setFooter({ text: 'Discord C4sino · Roulette Overview' });
 }
 
+export function baccaratOverview(): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle(`🎴  ${L('BACCARAT')} — ${L('OVERVIEW')}`)
+    .setColor(0x0d5a3a)
+    .setDescription('Punto Banco (標準) ルール。6-デッキシュー。')
+    .addFields(
+      { name: '🎯 Rules', value:
+        '• Player / Banker にそれぞれ 2 枚ずつ配る\n' +
+        '• 合計 8-9 はナチュラル (そのまま決着)\n' +
+        '• Player: 0–5 で 3 枚目ドロー、6–7 でスタンド\n' +
+        '• Banker: Player の 3 枚目に応じた標準テーブル\n' +
+        '• 合計点は下一桁 (14 → 4)',
+        inline: false },
+      { name: '💰 Payouts', value:
+        `${L('Player')}: **×2.0** (勝率 44.62%)\n` +
+        `${L('Banker')}: **×1.95** (勝率 45.86%, 5% コミ)\n` +
+        `${L('Tie')}: **×9.0** (発生率 9.52%)`,
+        inline: false },
+      { name: '📊 House edge', value: 'Banker **1.06%** / Player **1.24%** / Tie **14.4%**', inline: false },
+      { name: '📐 Bet range', value: `**10** 〜 **50,000** ${L('chips')}`, inline: true },
+      { name: '💳 最低入金額', value: depositLine(), inline: false },
+    )
+    .setFooter({ text: 'Discord C4sino · Baccarat Overview' });
+}
+
+export function videopokerOverview(): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle(`🃏  ${L('VIDEO POKER')} — ${L('OVERVIEW')}`)
+    .setColor(0x2d0a4e)
+    .setDescription('Jacks or Better (9/6 標準)。5 枚の初手から HOLD を選んで DRAW。')
+    .addFields(
+      { name: '💰 Paytable (per 1 bet)', value:
+        '`Royal Flush        ×800`\n' +
+        '`Straight Flush     ×50`\n' +
+        '`Four of a Kind     ×25`\n' +
+        '`Full House         ×9`\n' +
+        '`Flush              ×6`\n' +
+        '`Straight           ×4`\n' +
+        '`Three of a Kind    ×3`\n' +
+        '`Two Pair           ×2`\n' +
+        '`Jacks or Better    ×1`',
+        inline: false },
+      { name: '📊 RTP', value: '**99.54%** (最適プレイ時, 9/6 Jacks)', inline: false },
+      { name: '📐 Bet range', value: `**10** 〜 **50,000** ${L('chips')}`, inline: true },
+      { name: '💳 最低入金額', value: depositLine(), inline: false },
+    )
+    .setFooter({ text: 'Discord C4sino · Video Poker Overview' });
+}
+
 export function cashierOverview(): EmbedBuilder {
   return new EmbedBuilder()
     .setTitle('💵  CASHIER — 入金について')
@@ -180,6 +229,18 @@ export function allOverview(): EmbedBuilder {
           '**RTP = 97.30%**  (House edge 2.70%)\n' +
           `Max: Straight-up ×36 / Bet: 10 〜 50,000 ${L('chips')}`,
         inline: false },
+      { name: `🎴 ${L('BACCARAT')}`,
+        value:
+          'Punto Banco / Player / Banker / Tie\n' +
+          '**House edge 1.06%** (Banker)\n' +
+          `Max: Tie ×9 / Bet: 10 〜 50,000 ${L('chips')}`,
+        inline: false },
+      { name: `🃏 ${L('VIDEO POKER')}`,
+        value:
+          'Jacks or Better 9/6, 5-card draw\n' +
+          '**RTP ≈ 99.54%** (最適プレイ時)\n' +
+          `Max: Royal Flush ×800 / Bet: 10 〜 50,000 ${L('chips')}`,
+        inline: false },
       { name: '💳 最低入金額', value: depositLine(), inline: false },
       { name: '📒 用語',
         value:
@@ -195,6 +256,8 @@ export function gameOverview(game: GameKey): EmbedBuilder {
   if (game === 'blackjack') return blackjackOverview();
   if (game === 'slots')     return slotsOverview();
   if (game === 'roulette')  return rouletteOverview();
+  if (game === 'baccarat')  return baccaratOverview();
+  if (game === 'videopoker') return videopokerOverview();
   if (game === 'cashier')   return cashierOverview();
   return allOverview();
 }

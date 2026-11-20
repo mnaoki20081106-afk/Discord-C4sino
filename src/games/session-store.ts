@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { BJState } from './blackjack.js';
+import type { VPHand }  from './videopoker.js';
 
-type AnyState = BJState | { kind: 'slots'; bet: number };
+type AnyState = BJState | VPHand | { kind: 'slots'; bet: number };
 
-interface Entry { id: string; discordId: string; game: 'blackjack'|'slots'; state: AnyState; bet: number; }
+interface Entry { id: string; discordId: string; game: 'blackjack'|'slots'|'videopoker'; state: AnyState; bet: number; }
 
 const map = new Map<string, Entry>();
 
