@@ -73,7 +73,11 @@ const admin = new SlashCommandBuilder()
   .addSubcommand(s => s.setName('tx').setDescription('ユーザーの取引履歴')
     .addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true))
     .addIntegerOption(o => o.setName('limit').setDescription('件数').setRequired(false)))
-  .addSubcommand(s => s.setName('panel').setDescription('管理パネルをこのチャンネルに設置'));
+  .addSubcommand(s => s.setName('panel').setDescription('管理パネルをこのチャンネルに設置'))
+  .addSubcommand(s => s.setName('achievements')
+    .setDescription('実績 (当選履歴) を流すチャンネルを設定/解除')
+    .addChannelOption(o => o.setName('channel').setDescription('設定するチャンネル (空で解除)').setRequired(false))
+    .addStringOption(o => o.setName('base').setDescription('チャンネル名のベース (例: 実績 → 実績-実績12件)').setRequired(false)));
 
 const commands = [setup, balance, overview, pay, wallet, admin].map(c => c.toJSON());
 

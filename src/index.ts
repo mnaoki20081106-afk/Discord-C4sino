@@ -19,6 +19,7 @@ import { assertBetAffordable, invalidateLiquidityCache, maxAffordableBet } from 
 import { MIN_DEPOSIT_JPY } from './payments/limits.js';
 import { L } from './ui/leet.js';
 import { gameOverview, type GameKey } from './ui/overview.js';
+import * as ach from './achievements.js';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
@@ -29,6 +30,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS guild_config (
   guild_id TEXT PRIMARY KEY,
   admin_channel_id TEXT
 );`);
+// 実績機能用カラムを追加 (存在時は無視)
+for (const col of ['achievements_channel_id TEXT', 'achievements_base_name TEXT']) {
+  try { db.exec(`ALTER TABLE guild_config ADD COLUMN ${col}`); } catch { /* exists */ }
+}
 
 function getAdminChannel(guildId: string): string | null {
   const r = db.prepare('SELECT admin_channel_id FROM guild_config WHERE guild_id=?').get(guildId) as { admin_channel_id: string } | undefined;
@@ -245,6 +250,25 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
     const embed = new EmbedBuilder().setTitle(`📜 <@${u.id}> のTX`).setDescription(list).setFooter({ text: `現残高 ${bal.toLocaleString()}` });
     return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
+  if (sub === 'achievements') {
+    const ch = i.options.getChannel('channel');
+    if (!ch) {
+      ach.setConfig(i.guildId!, null, null);
+      return i.reply({ content: '✅ 実績チャンネルを解除しました', flags: MessageFlags.Ephemeral });
+    }
+    const base = i.options.getString('base') ?? (ch.name ?? 'achievements').replace(/[-_ー]実績\d+件$/, '');
+    ach.setConfig(i.guildId!, ch.id, base);
+    const count = ach.countAchievements(i.guildId!);
+    // 即リネームを試みる
+    try {
+      const fetched = await client.channels.fetch(ch.id);
+      if (fetched && 'setName' in fetched) await (fetched as any).setName(ach.formatChannelName(base, count));
+    } catch (e) { /* rate limit など */ }
+    return i.reply({
+      content: `✅ 実績チャンネル: <#${ch.id}>\nベース名: \`${base}\`  /  現在 ${count} 件`,
+      flags: MessageFlags.Ephemeral
+    });
+  }
   if (sub === 'panel') {
     if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
     const embed = new EmbedBuilder().setTitle('🛠️  Admin Panel').setColor(0xd4af37)
@@ -367,8 +391,29 @@ async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
 
   if (st.phase === 'done') {
     if (st.payout) txCredit(i.user.id, st.payout, 'win:blackjack', sid);
+    await onGameSettled(i, 'blackjack', st);
     sessions.drop(sid);
   }
+}
+
+async function onGameSettled(i: ButtonInteraction | ModalSubmitInteraction, game: 'blackjack'|'slots', st: BJState | null, slotBet?: number, slotPayout?: number) {
+  if (!i.guildId) return;
+  let bet = 0, payout = 0;
+  if (game === 'blackjack' && st) {
+    bet = st.bets.reduce((a,b)=>a+b, 0);
+    payout = st.payout ?? 0;
+  } else if (game === 'slots') {
+    bet = slotBet ?? 0;
+    payout = slotPayout ?? 0;
+  }
+  const net = payout - bet;
+  if (net <= 0) return;
+  ach.recordAchievement({
+    guildId: i.guildId, discordId: i.user.id, game, bet, payout, net,
+  });
+  await ach.announce(client, {
+    guildId: i.guildId, discordId: i.user.id, game, bet, payout, net,
+  });
 }
 
 async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState) {
@@ -385,6 +430,7 @@ async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState) {
   await i.update({ embeds: [embed], files: [file], components: rows, attachments: [] });
   if (st.phase === 'done') {
     if (st.payout) txCredit(i.user.id, st.payout, 'win:blackjack', sid);
+    await onGameSettled(i, 'blackjack', st);
     sessions.drop(sid);
   }
 }
@@ -450,6 +496,7 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
   if (result.payoutMult > 0) {
     const win = bet * result.payoutMult;
     txCredit(i.user.id, win, 'win:slots');
+    await onGameSettled(i, 'slots', null, bet, win);
   }
 }
 

@@ -97,6 +97,20 @@ CREATE TABLE IF NOT EXISTS user_bans (
   reason     TEXT,
   banned_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
+
+-- 実績 (当選記録)
+CREATE TABLE IF NOT EXISTS achievements (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  guild_id   TEXT NOT NULL,
+  discord_id TEXT NOT NULL,
+  game       TEXT NOT NULL,
+  bet        INTEGER NOT NULL,
+  payout     INTEGER NOT NULL,
+  net        INTEGER NOT NULL,
+  mult       REAL,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+CREATE INDEX IF NOT EXISTS idx_ach_guild ON achievements(guild_id);
 `);
 
 export function ensureUser(discordId: string) {
