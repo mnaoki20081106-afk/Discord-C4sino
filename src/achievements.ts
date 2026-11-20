@@ -5,11 +5,22 @@ import { L } from './ui/leet.js';
 export interface AchievementRecord {
   guildId: string;
   discordId: string;
-  game: 'blackjack' | 'slots';
+  game: 'blackjack' | 'slots' | 'roulette';
   bet: number;
   payout: number;
   net: number;
 }
+
+const GAME_LABEL: Record<string, string> = {
+  blackjack: 'Blackjack',
+  slots:     'Slots',
+  roulette:  'Roulette',
+};
+const GAME_EMOJI: Record<string, string> = {
+  blackjack: '🂡',
+  slots:     '🎰',
+  roulette:  '🎡',
+};
 
 export function countAchievements(guildId: string): number {
   return (db.prepare('SELECT COUNT(*) c FROM achievements WHERE guild_id=?').get(guildId) as any).c;
@@ -79,16 +90,16 @@ export async function announce(client: Client, a: AchievementRecord): Promise<vo
   if (!ch || !('send' in ch)) return;
 
   const mult = a.bet > 0 ? a.payout / a.bet : 0;
-  const tier = a.game === 'slots'
-    ? (mult >= 2000 ? 'JACKPOT' : mult >= 200 ? 'BIG WIN' : 'WIN')
-    : (a.net >= a.bet * 4 ? 'BIG WIN' : 'WIN');
+  const tier =
+    a.game === 'slots'    ? (mult >= 2000 ? 'JACKPOT' : mult >= 200 ? 'BIG WIN' : 'WIN')
+  : a.game === 'roulette' ? (mult >= 30   ? 'BIG WIN' : 'WIN')
+  :                         (a.net >= a.bet * 4 ? 'BIG WIN' : 'WIN');
   const color = tier === 'JACKPOT' ? 0xffd93d : tier === 'BIG WIN' ? 0xf59e0b : 0x22c55e;
 
-  const emoji = a.game === 'slots' ? '🎰' : '🂡';
   const embed = new EmbedBuilder()
     .setColor(color)
-    .setTitle(`${emoji}  ${L(tier)}  !!`)
-    .setDescription(`<@${a.discordId}> が **${L(a.game === 'blackjack' ? 'Blackjack' : 'Slots')}** で当選`)
+    .setTitle(`${GAME_EMOJI[a.game]}  ${L(tier)}  !!`)
+    .setDescription(`<@${a.discordId}> が **${L(GAME_LABEL[a.game])}** で当選`)
     .addFields(
       { name: L('BET'),    value: `${a.bet.toLocaleString()} ${L('chips')}`, inline: true },
       { name: L('Payout'), value: `${a.payout.toLocaleString()} ${L('chips')}`, inline: true },

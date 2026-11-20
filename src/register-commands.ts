@@ -8,6 +8,7 @@ const setup = new SlashCommandBuilder()
     .addChoices(
       { name: 'Blackjack', value: 'blackjack' },
       { name: 'Slots',     value: 'slots' },
+      { name: 'Roulette',  value: 'roulette' },
       { name: 'Cashier (入金)', value: 'cashier' },
     ));
 
@@ -24,6 +25,7 @@ const overview = new SlashCommandBuilder()
       { name: 'All  (全ゲーム概要)',  value: 'all' },
       { name: 'Blackjack',             value: 'blackjack' },
       { name: 'Slots',                 value: 'slots' },
+      { name: 'Roulette',              value: 'roulette' },
       { name: 'Cashier (入金について)', value: 'cashier' },
     ));
 

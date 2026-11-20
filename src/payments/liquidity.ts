@@ -8,13 +8,14 @@ import { addressBalanceLtc, ltcJpyRate } from './ltc.js';
 import { db } from '../db/schema.js';
 
 /** 各ゲームで 1 bet あたりに発生しうる最大 "gross payout" の倍率。 */
-export const MAX_GROSS_MULT: Record<'blackjack'|'slots', number> = {
+export const MAX_GROSS_MULT: Record<'blackjack'|'slots'|'roulette', number> = {
   // 4ハンド split まで可 + 各ハンド double 可 + 全ハンド勝利
   // gross payout per original bet = 4 (hands) × 2 (double) × 2 (win) = 16
-  // ただし BJ 単独勝利は 2.5。split 後は BJ 不可 (10+Aは単なる21扱い) ので 16 が上界。
   blackjack: 16,
   // 7️⃣×3 の 2300 倍
   slots: 2300,
+  // straight-up (単一数字) で ×36
+  roulette: 36,
 };
 
 /** 全ウォレットの流動性 (JPY)。PayPay はキャッシュ値、LTC は BlockCypher 残高×レート。 */
@@ -74,7 +75,7 @@ export async function cachedLiquidity(): Promise<Awaited<ReturnType<typeof total
 export function invalidateLiquidityCache() { _cache = null; }
 
 /** ベット額 × 最大倍率 ≤ 流動性 を満たすか検査。失敗時は投げる。 */
-export async function assertBetAffordable(game: 'blackjack'|'slots', bet: number): Promise<void> {
+export async function assertBetAffordable(game: 'blackjack'|'slots'|'roulette', bet: number): Promise<void> {
   // プレイヤー全員のプール済みチップ (= 既に債務として存在) も差し引いて考える
   const liq = await cachedLiquidity();
   const outstanding = (db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get() as any).s as number;
@@ -91,13 +92,14 @@ export async function assertBetAffordable(game: 'blackjack'|'slots', bet: number
 }
 
 /** 現在の最大許容 BET をゲーム別に返す (UI 表示用)。 */
-export async function maxAffordableBet(): Promise<{ blackjack: number; slots: number; liq: Awaited<ReturnType<typeof totalLiquidityJpy>>; outstanding: number; effective: number }> {
+export async function maxAffordableBet(): Promise<{ blackjack: number; slots: number; roulette: number; liq: Awaited<ReturnType<typeof totalLiquidityJpy>>; outstanding: number; effective: number }> {
   const liq = await cachedLiquidity();
   const outstanding = (db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get() as any).s as number;
   const effective = Math.max(0, liq.total - outstanding);
   return {
     blackjack: Math.floor(effective / MAX_GROSS_MULT.blackjack),
     slots:     Math.floor(effective / MAX_GROSS_MULT.slots),
+    roulette:  Math.floor(effective / MAX_GROSS_MULT.roulette),
     liq, outstanding, effective,
   };
 }

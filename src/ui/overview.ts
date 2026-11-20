@@ -3,7 +3,7 @@ import { SYMBOLS } from '../games/slots.js';
 import { MIN_DEPOSIT_JPY, MIN_BET_CHIPS, MAX_BET_CHIPS } from '../payments/limits.js';
 import { L } from './leet.js';
 
-export type GameKey = 'blackjack' | 'slots' | 'cashier' | 'all';
+export type GameKey = 'blackjack' | 'slots' | 'roulette' | 'cashier' | 'all';
 
 /** スロットの実 RTP を重みから計算 */
 export function computeSlotsRTP() {
@@ -102,6 +102,33 @@ export function slotsOverview(): EmbedBuilder {
     .setFooter({ text: 'Discord C4sino · Slots Overview' });
 }
 
+export function rouletteOverview(): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle(`🎡  ${L('EUROPEAN')} ${L('ROULETTE')} — ${L('OVERVIEW')}`)
+    .setColor(0x0d5a3a)
+    .setDescription(
+      '0〜36 の 37 ポケットのホイールにボールが転がり、停止ポケットで勝敗が決まる。' +
+      'ヨーロピアン型は 0 のみ（アメリカン型の 00 なし）で RTP が高い。'
+    )
+    .addFields(
+      { name: '💰 Payouts', value:
+        '**Outside Bets (低リスク)**\n' +
+        '🟥 Red / ⬛ Black / Odd / Even / 1–18 / 19–36  → **×2**\n' +
+        '**Dozen / Column**\n' +
+        '1st12 / 2nd12 / 3rd12 / Col1 / Col2 / Col3  → **×3**\n' +
+        '**Inside Bet (高リスク)**\n' +
+        'Straight-up (単一数字 0–36)  → **×36**',
+        inline: false },
+      { name: '📊 RTP',   value: '**97.30%**  (House edge 2.70%)\nすべてのベット種別で同じ RTP。', inline: false },
+      { name: '🎯 Odds',  value:
+        'Red/Black/Odd/Even/1–18/19–36: **48.65%**\nDozen/Column: **32.43%**\nStraight-up: **2.70%**',
+        inline: false },
+      { name: '📐 Bet range', value: `**10** 〜 **50,000** ${L('chips')}`, inline: true },
+      { name: '💳 最低入金額', value: depositLine(), inline: false },
+    )
+    .setFooter({ text: 'Discord C4sino · Roulette Overview' });
+}
+
 export function cashierOverview(): EmbedBuilder {
   return new EmbedBuilder()
     .setTitle('💵  CASHIER — 入金について')
@@ -147,6 +174,12 @@ export function allOverview(): EmbedBuilder {
           `**RTP ≈ ${(s.rtp * 100).toFixed(2)}%**  (House edge ${(100 - s.rtp*100).toFixed(2)}%)\n` +
           `Max: 7️⃣×3 ×2300 / Bet: ${MIN_BET_CHIPS.slots.toLocaleString()} 〜 ${MAX_BET_CHIPS.slots.toLocaleString()} ${L('chips')}`,
         inline: false },
+      { name: `🎡 ${L('ROULETTE')}`,
+        value:
+          'European single-zero / 37 ポケット\n' +
+          '**RTP = 97.30%**  (House edge 2.70%)\n' +
+          `Max: Straight-up ×36 / Bet: 10 〜 50,000 ${L('chips')}`,
+        inline: false },
       { name: '💳 最低入金額', value: depositLine(), inline: false },
       { name: '📒 用語',
         value:
@@ -161,6 +194,7 @@ export function allOverview(): EmbedBuilder {
 export function gameOverview(game: GameKey): EmbedBuilder {
   if (game === 'blackjack') return blackjackOverview();
   if (game === 'slots')     return slotsOverview();
+  if (game === 'roulette')  return rouletteOverview();
   if (game === 'cashier')   return cashierOverview();
   return allOverview();
 }

@@ -44,6 +44,44 @@ export function slotsPanel() {
   return { embeds: [embed], components: [row] };
 }
 
+export function roulettePanel() {
+  const embed = new EmbedBuilder()
+    .setTitle(`🎡  ${L('EUROPEAN')} ${L('ROULETTE')}  🎡`)
+    .setDescription('シングルゼロ (0 のみ) のヨーロピアン・ルーレット。House edge **2.70%**。')
+    .setColor(0x0d5a3a)
+    .addFields(
+      { name: L('Pays'), value:
+        '🟥 Red / ⬛ Black / Odd / Even / 1–18 / 19–36 ... **×2**\n' +
+        '1st12 / 2nd12 / 3rd12 / Col1 / Col2 / Col3 ... **×3**\n' +
+        'Straight-up (単一数字) ... **×36**',
+        inline: false },
+      { name: L('Bet'), value: `10 〜 50,000 ${L('chips')}`, inline: true },
+      { name: 'RTP',   value: '≈ 97.30%', inline: true },
+    )
+    .setFooter({ text: 'Discord C4sino · Roulette Table' });
+
+  const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('rou:bet:red').setLabel('🟥 RED').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('rou:bet:black').setLabel('⬛ BLACK').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('rou:bet:odd').setLabel('ODD').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('rou:bet:even').setLabel('EVEN').setStyle(ButtonStyle.Primary),
+  );
+  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('rou:bet:low').setLabel('1–18').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('rou:bet:high').setLabel('19–36').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('rou:bet:dozen1').setLabel('1st12').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('rou:bet:dozen2').setLabel('2nd12').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('rou:bet:dozen3').setLabel('3rd12').setStyle(ButtonStyle.Secondary),
+  );
+  const row3 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('rou:bet:column1').setLabel('Col1').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('rou:bet:column2').setLabel('Col2').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('rou:bet:column3').setLabel('Col3').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('rou:bet:number').setLabel('🎯 Straight (×36)').setStyle(ButtonStyle.Success),
+  );
+  return { embeds: [embed], components: [row1, row2, row3] };
+}
+
 export function depositPanel() {
   const embed = new EmbedBuilder()
     .setTitle(`💵  ${L('CASHIER')}  💵`)

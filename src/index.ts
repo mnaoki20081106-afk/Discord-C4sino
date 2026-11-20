@@ -9,9 +9,11 @@ import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned } from 
 import * as sessions from './games/session-store.js';
 import { startHand, availableActions, apply, newShoe, isBlackjack, type BJState } from './games/blackjack.js';
 import { spin, reelStrip } from './games/slots.js';
+import { spinRoulette, payoutMult as rouPayout, WHEEL, type BetKind as RouKind } from './games/roulette.js';
 import { renderBlackjack } from './ui/render-table.js';
 import { renderSlots } from './ui/render-slots.js';
-import { blackjackPanel, slotsPanel, depositPanel, bjActionsRow } from './ui/panels.js';
+import { renderRoulette } from './ui/render-roulette.js';
+import { blackjackPanel, slotsPanel, roulettePanel, depositPanel, bjActionsRow } from './ui/panels.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
@@ -102,6 +104,7 @@ async function cmdSetup(i: ChatInputCommandInteraction) {
   const game = i.options.getString('game', true);
   const payload = game === 'blackjack' ? blackjackPanel()
                : game === 'slots'     ? slotsPanel()
+               : game === 'roulette'  ? roulettePanel()
                : depositPanel();
   if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
   const msg = await i.channel.send(payload);
@@ -231,7 +234,7 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
                  `**実効流動性: ¥${m.effective.toLocaleString()}**`,
           inline: false },
         { name: '📐 許容 BET 上限',
-          value: `Blackjack: **${m.blackjack.toLocaleString()}**\nSlots: **${m.slots.toLocaleString()}**`,
+          value: `Blackjack: **${m.blackjack.toLocaleString()}**\nSlots: **${m.slots.toLocaleString()}**\nRoulette: **${m.roulette.toLocaleString()}**`,
           inline: false },
       );
     return i.editReply({ embeds: [embed] });
@@ -289,6 +292,7 @@ async function onButton(i: ButtonInteraction) {
   const [ns, kind, arg] = i.customId.split(':');
   if (ns === 'bj') return onBJButton(i, kind, arg);
   if (ns === 'slot') return onSlotButton(i, kind, arg);
+  if (ns === 'rou')  return onRouletteButton(i, kind, arg);
   if (ns === 'dep') return onDepositButton(i, kind, arg);
   if (ns === 'adm') return onAdminButton(i, kind);
   if (ns === 'bal') {
@@ -396,23 +400,23 @@ async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
   }
 }
 
-async function onGameSettled(i: ButtonInteraction | ModalSubmitInteraction, game: 'blackjack'|'slots', st: BJState | null, slotBet?: number, slotPayout?: number) {
+async function onGameSettled(i: ButtonInteraction | ModalSubmitInteraction, game: 'blackjack'|'slots'|'roulette', st: BJState | null, extBet?: number, extPayout?: number) {
   if (!i.guildId) return;
   let bet = 0, payout = 0;
   if (game === 'blackjack' && st) {
     bet = st.bets.reduce((a,b)=>a+b, 0);
     payout = st.payout ?? 0;
-  } else if (game === 'slots') {
-    bet = slotBet ?? 0;
-    payout = slotPayout ?? 0;
+  } else {
+    bet = extBet ?? 0;
+    payout = extPayout ?? 0;
   }
   const net = payout - bet;
   if (net <= 0) return;
   ach.recordAchievement({
-    guildId: i.guildId, discordId: i.user.id, game, bet, payout, net,
+    guildId: i.guildId, discordId: i.user.id, game: game as any, bet, payout, net,
   });
   await ach.announce(client, {
-    guildId: i.guildId, discordId: i.user.id, game, bet, payout, net,
+    guildId: i.guildId, discordId: i.user.id, game: game as any, bet, payout, net,
   });
 }
 
@@ -497,6 +501,90 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
     const win = bet * result.payoutMult;
     txCredit(i.user.id, win, 'win:slots');
     await onGameSettled(i, 'slots', null, bet, win);
+  }
+}
+
+/* ────────────── ROULETTE ────────────── */
+
+const ROU_LABEL: Record<string, string> = {
+  red: '🟥 Red', black: '⬛ Black', odd: 'Odd', even: 'Even',
+  low: '1–18', high: '19–36',
+  dozen1: '1st12', dozen2: '2nd12', dozen3: '3rd12',
+  column1: 'Col1', column2: 'Col2', column3: 'Col3',
+  number: '🎯 Straight-up',
+};
+
+async function onRouletteButton(i: ButtonInteraction, kind: string, arg: string) {
+  if (kind !== 'bet') return;
+  assertNotBanned(i.user.id);
+  if (arg === 'number') {
+    const modal = new ModalBuilder().setCustomId('rou:num').setTitle(`${L('ROULETTE')} — Straight-up`)
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder().setCustomId('num').setLabel('数字 (0〜36)').setStyle(TextInputStyle.Short).setRequired(true)),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)),
+      );
+    return i.showModal(modal);
+  }
+  const modal = new ModalBuilder().setCustomId(`rou:amt:${arg}`).setTitle(`${L('ROULETTE')} — ${ROU_LABEL[arg] ?? arg}`)
+    .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)
+    ));
+  return i.showModal(modal);
+}
+
+async function doRouletteSpin(
+  i: ModalSubmitInteraction,
+  kind: RouKind, bet: number, number?: number
+) {
+  assertNotBanned(i.user.id);
+  ensureUser(i.user.id);
+  if (bet < 10 || bet > 50_000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
+  if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
+  if (kind === 'number' && (number === undefined || number < 0 || number > 36))
+    return i.reply({ content: '数字は 0 〜 36 です', flags: MessageFlags.Ephemeral });
+  try { await assertBetAffordable('roulette', bet); }
+  catch (e) { return i.reply({ content: `🏦 ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
+  txCredit(i.user.id, -bet, 'bet:roulette');
+
+  const result = spinRoulette();
+  const mult   = rouPayout({ kind, amount: bet, number }, result);
+  const label  = kind === 'number' ? `${ROU_LABEL.number} ${number}` : (ROU_LABEL[kind] ?? kind);
+
+  // 回転アニメ (4フレーム: ホイール位置が徐々に結果に収束)
+  const finalIdx = WHEEL.indexOf(result);
+  const seg = (Math.PI * 2) / WHEEL.length;
+  const finalAngle = finalIdx * seg;
+  // 動き: 2回転+減衰して finalAngle に着地
+  const frames = 4;
+  const total  = Math.PI * 2 * 3 + finalAngle;    // 3回転 + 着地角
+  const angles = Array.from({length: frames}, (_, k) => {
+    const t = (k + 1) / frames;       // 0.25, 0.5, 0.75, 1.0
+    const eased = 1 - Math.pow(1 - t, 3);  // ease-out cubic
+    return eased * total;
+  });
+
+  const first = await renderRoulette({
+    betLabel: label, betAmount: bet, balance: getBalance(i.user.id),
+    resultNumber: result, ballAngle: 0, spinning: true, payoutMult: 0,
+  });
+  await i.reply({ files: [new AttachmentBuilder(first, { name: 'r.png' })], flags: MessageFlags.Ephemeral });
+  for (let f = 0; f < frames; f++) {
+    await new Promise(r => setTimeout(r, 700));
+    const spinning = f < frames - 1;
+    const buf = await renderRoulette({
+      betLabel: label, betAmount: bet, balance: getBalance(i.user.id),
+      resultNumber: result, ballAngle: angles[f], spinning, payoutMult: spinning ? 0 : mult,
+      label: mult >= 20 ? L('BIG WIN') : L('WIN'),
+    });
+    await i.editReply({ files: [new AttachmentBuilder(buf, { name: 'r.png' })] });
+  }
+
+  if (mult > 0) {
+    const win = bet * mult;
+    txCredit(i.user.id, win, 'win:roulette');
+    await onGameSettled(i, 'roulette', null, bet, win);
   }
 }
 
@@ -618,6 +706,16 @@ async function onModal(i: ModalSubmitInteraction) {
     const amt = parseInt(i.fields.getTextInputValue('amt'), 10);
     if (!Number.isFinite(amt)) return i.reply({ content: '不正な数値', flags: MessageFlags.Ephemeral });
     return startBJ(i, amt);
+  }
+  if (i.customId === 'rou:num') {
+    const num = parseInt(i.fields.getTextInputValue('num'), 10);
+    const amt = parseInt(i.fields.getTextInputValue('amt'), 10);
+    return doRouletteSpin(i, 'number', amt, num);
+  }
+  if (i.customId.startsWith('rou:amt:')) {
+    const kind = i.customId.split(':')[2] as RouKind;
+    const amt  = parseInt(i.fields.getTextInputValue('amt'), 10);
+    return doRouletteSpin(i, kind, amt);
   }
   if (i.customId === 'slot:custombet') {
     const amt = parseInt(i.fields.getTextInputValue('amt'), 10);
