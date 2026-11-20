@@ -7,7 +7,7 @@ import {
 } from 'discord.js';
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned } from './db/schema.js';
 import * as sessions from './games/session-store.js';
-import { startHand, availableActions, apply, newShoe, isBlackjack, type BJState } from './games/blackjack.js';
+import { startHand, availableActions, apply, newShoe, isBlackjack, handTotal, type BJState } from './games/blackjack.js';
 import { spin, spinWithCap, reelStrip } from './games/slots.js';
 import { spinRoulette, spinRouletteWithCap, payoutMult as rouPayout, WHEEL, type BetKind as RouKind } from './games/roulette.js';
 import { dealBaccarat, dealBaccaratWithCap, payoutMult as bacPayout, type Side as BacSide } from './games/baccarat.js';
@@ -462,7 +462,8 @@ async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
     phase: st.phase, results: st.results, payout: st.payout,
   });
   const file = new AttachmentBuilder(buf, { name: 'bj.png' });
-  const embed = new EmbedBuilder().setImage('attachment://bj.png').setColor(0x0d5a3a).setFooter({ text: `sid=${sid}` });
+  const embed = buildBJEmbed(st, getBalance(i.user.id), sid);
+  embed.setImage('attachment://bj.png');
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   if (st.phase === 'player') rows.push(bjActionsRow(availableActions(st)));
 
@@ -473,6 +474,48 @@ async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
     await onGameSettled(i, 'blackjack', st);
     sessions.drop(sid);
   }
+}
+
+function buildBJEmbed(st: BJState, balance: number, sid: string): EmbedBuilder {
+  const totalBet = st.bets.reduce((a,b)=>a+b, 0);
+  const dTotal = handTotal(st.dealer).total;
+  const pTotals = st.player.map(h => handTotal(h).total);
+
+  let title = `🂡 ${L('BLACKJACK')}`;
+  let color = 0x3b82f6;        // 青: 進行中
+  let header = '';
+
+  if (st.phase === 'player') {
+    header = `あなたの番 — hand ${st.active + 1}/${st.player.length}`;
+  } else if (st.phase === 'dealer') {
+    header = 'ディーラーの引き…';
+  } else {
+    // done
+    const net = (st.payout ?? 0) - totalBet;
+    if (net > 0) {
+      header = `**${L('YOU')} ${L('WIN')}!**  +${net.toLocaleString()} ${L('chips')}`;
+      color = 0x22c55e;
+    } else if (net < 0) {
+      header = `**${L('LOSE')}**  ${net.toLocaleString()} ${L('chips')}`;
+      color = 0xef4444;
+    } else {
+      header = `**${L('PUSH')}**  — bet 返却`;
+      color = 0x9ca3af;
+    }
+  }
+
+  const embed = new EmbedBuilder()
+    .setTitle(title)
+    .setDescription(header)
+    .setColor(color)
+    .addFields(
+      { name: L('Dealer'), value: st.phase === 'player' ? `**?** + ${handTotal([st.dealer[0]]).total}` : `**${dTotal}**`, inline: true },
+      { name: L('Player'), value: pTotals.map(t => `**${t}**`).join(' / '), inline: true },
+      { name: L('Bet'),    value: `${totalBet.toLocaleString()} ${L('chips')}`, inline: true },
+      { name: L('Balance'), value: `${balance.toLocaleString()} ${L('chips')}`, inline: true },
+    )
+    .setFooter({ text: `sid=${sid}` });
+  return embed;
 }
 
 /** 払戻しを cap まで clamp し、payout=0 になるハンドの結果は 'lose' に書換 */
@@ -533,7 +576,8 @@ async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState) {
     phase: st.phase, results: st.results, payout: st.payout,
   });
   const file = new AttachmentBuilder(buf, { name: 'bj.png' });
-  const embed = new EmbedBuilder().setImage('attachment://bj.png').setColor(0x0d5a3a).setFooter({ text: `sid=${sid}` });
+  const embed = buildBJEmbed(st, getBalance(i.user.id), sid);
+  embed.setImage('attachment://bj.png');
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   if (st.phase === 'player') rows.push(bjActionsRow(availableActions(st)));
   await i.update({ embeds: [embed], files: [file], components: rows, attachments: [] });
