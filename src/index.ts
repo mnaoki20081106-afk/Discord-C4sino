@@ -3,7 +3,7 @@ import {
   Client, GatewayIntentBits, Partials, AttachmentBuilder, ModalBuilder,
   TextInputBuilder, TextInputStyle, ActionRowBuilder, Events, PermissionFlagsBits,
   EmbedBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteraction,
-  ButtonInteraction, ModalSubmitInteraction, MessageFlags,
+  ButtonInteraction, ModalSubmitInteraction, StringSelectMenuInteraction, MessageFlags,
 } from 'discord.js';
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned } from './db/schema.js';
 import * as sessions from './games/session-store.js';
@@ -42,6 +42,7 @@ client.on(Events.InteractionCreate, async (i) => {
     if (i.isChatInputCommand()) await onCommand(i);
     else if (i.isButton()) await onButton(i);
     else if (i.isModalSubmit()) await onModal(i);
+    else if (i.isStringSelectMenu()) await onSelect(i);
   } catch (e) {
     console.error(e);
     const msg = `❌ ${(e as Error).message}`;
@@ -60,7 +61,15 @@ async function onCommand(i: ChatInputCommandInteraction) {
     case 'balance':  return cmdBalance(i);
     case 'wallet':   return cmdWallet(i);
     case 'admin':    return cmdAdmin(i);
+    case 'pay':      return cmdPay(i);
   }
+}
+
+async function cmdPay(i: ChatInputCommandInteraction) {
+  assertNotBanned(i.user.id);
+  const method = i.options.getString('method', true) as 'paypay' | 'ltc';
+  if (method === 'paypay') return openPaypayDepositModal(i);
+  if (method === 'ltc')    return showLtcAddress(i);
 }
 
 async function cmdSetup(i: ChatInputCommandInteraction) {
@@ -415,30 +424,43 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
 
 async function onDepositButton(i: ButtonInteraction, kind: string, _arg: string) {
   assertNotBanned(i.user.id);
-  if (kind === 'paypay') {
-    const modal = new ModalBuilder().setCustomId('dep:paypay').setTitle('PayPay 送金リンク入金')
-      .addComponents(
-        new ActionRowBuilder<TextInputBuilder>().addComponents(
-          new TextInputBuilder().setCustomId('url').setLabel('送金リンク URL または ID').setStyle(TextInputStyle.Short).setRequired(true)),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(
-          new TextInputBuilder().setCustomId('pin').setLabel('パスコード (設定していれば)').setStyle(TextInputStyle.Short).setRequired(false)),
-      );
-    return i.showModal(modal);
+  if (kind === 'paypay') return openPaypayDepositModal(i);
+  if (kind === 'ltc')    return showLtcAddress(i);
+}
+
+async function onSelect(i: StringSelectMenuInteraction) {
+  if (i.customId === 'dep:method') {
+    assertNotBanned(i.user.id);
+    const choice = i.values[0];
+    if (choice === 'paypay') return openPaypayDepositModal(i);
+    if (choice === 'ltc')    return showLtcAddress(i);
   }
-  if (kind === 'ltc') {
-    await i.deferReply({ flags: MessageFlags.Ephemeral });
-    const addr = await getOrCreateAddress(i.user.id);
-    const rate = await ltcJpyRate().catch(() => null);
-    const embed = new EmbedBuilder()
-      .setTitle('LTC 入金')
-      .setDescription('下記アドレスに LTC を送金してください。1承認で自動チャージされます。')
-      .addFields(
-        { name: 'Address', value: `\`${addr}\`` },
-        ...(rate ? [{ name: L('Rate'), value: `1 LTC ≈ ¥${rate.toLocaleString()}` }] : []),
-      )
-      .setColor(0x345d9d);
-    return i.editReply({ embeds: [embed] });
-  }
+}
+
+async function openPaypayDepositModal(i: ButtonInteraction | StringSelectMenuInteraction | ChatInputCommandInteraction) {
+  const modal = new ModalBuilder().setCustomId('dep:paypay').setTitle('PayPay 送金リンク入金')
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId('url').setLabel('送金リンク URL または ID').setStyle(TextInputStyle.Short).setRequired(true)),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId('pin').setLabel('パスコード (設定していれば)').setStyle(TextInputStyle.Short).setRequired(false)),
+    );
+  await i.showModal(modal);
+}
+
+async function showLtcAddress(i: ButtonInteraction | StringSelectMenuInteraction | ChatInputCommandInteraction) {
+  await i.deferReply({ flags: MessageFlags.Ephemeral });
+  const addr = await getOrCreateAddress(i.user.id);
+  const rate = await ltcJpyRate().catch(() => null);
+  const embed = new EmbedBuilder()
+    .setTitle('💠 LTC 入金')
+    .setDescription('下記アドレスに LTC を送金してください。**1承認で自動チャージ**されます。')
+    .addFields(
+      { name: 'Address', value: `\`${addr}\`` },
+      ...(rate ? [{ name: L('Rate'), value: `1 LTC ≈ ¥${rate.toLocaleString()}` }] : []),
+    )
+    .setColor(0x345d9d);
+  await i.editReply({ embeds: [embed] });
 }
 
 async function processPaypayDeposit(discordId: string, linkInput: string, passcode: string | undefined): Promise<{ amount: number; wallet: string }> {
