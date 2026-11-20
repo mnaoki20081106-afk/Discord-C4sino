@@ -1,7 +1,14 @@
-// LTC 入金監視 - BlockCypher の軽量ポーリング実装。
-// 本番は独自ノードや webhook を推奨。ここでは最小構成。
+// LTC 入金監視 + 送金 (自動出金) - BlockCypher API 経由。
+// 本番は独自ノードや webhook を推奨。
 
 import { db } from '../db/schema.js';
+import * as secp from '@noble/secp256k1';
+import { hmac } from '@noble/hashes/hmac';
+import { sha256 } from '@noble/hashes/sha256';
+
+// @noble/secp256k1 v2 (同期 API) は HMAC-SHA256 をユーザーが登録する必要がある
+(secp as any).etc.hmacSha256Sync = (k: Uint8Array, ...m: Uint8Array[]) =>
+  hmac(sha256, k, (secp as any).etc.concatBytes(...m));
 
 const API = 'https://api.blockcypher.com/v1/ltc/main';
 
@@ -52,4 +59,103 @@ export async function ltcJpyRate(): Promise<number> {
   if (!r.ok) throw new Error('rate fetch failed');
   const j = await r.json() as { litecoin: { jpy: number } };
   return j.litecoin.jpy;
+}
+
+/**
+ * LTC 送金 (ホットウォレット) — BlockCypher の 2 段 API を使う:
+ *   1) POST /txs/new  → tx skeleton + 署名すべき hash 配列 (tosign)
+ *   2) ECDSA (secp256k1) でローカル署名
+ *   3) POST /txs/send → ブロードキャスト → txid 返却
+ * priv は hex 文字列 (64 chars)、公開鍵は圧縮形式 (33 bytes)
+ */
+export async function sendLtc(fromAddress: string, privHex: string, toAddress: string, amountLtc: number): Promise<{ txid: string; feeLtc: number }> {
+  const token = process.env.LTC_API_TOKEN;
+  if (!token) throw new Error('LTC_API_TOKEN not set');
+  const q = `?token=${token}`;
+  const satoshi = Math.floor(amountLtc * 1e8);
+  if (satoshi <= 0) throw new Error('invalid amount');
+
+  // 1) create new tx skeleton
+  const newRes = await fetch(`${API}/txs/new${q}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      inputs: [{ addresses: [fromAddress] }],
+      outputs: [{ addresses: [toAddress], value: satoshi }],
+    }),
+  });
+  if (!newRes.ok) {
+    const t = await newRes.text();
+    throw new Error(`ltc tx/new ${newRes.status}: ${t.slice(0, 200)}`);
+  }
+  const skel = await newRes.json() as { tx: any; tosign: string[]; errors?: any[]; fees?: number };
+  if (skel.errors && skel.errors.length) throw new Error(`ltc tx/new: ${JSON.stringify(skel.errors)}`);
+
+  // 2) local sign
+  const priv = hexToBytes(privHex);
+  const pub  = secp.getPublicKey(priv, true);           // 圧縮公開鍵
+  const pubHex = bytesToHex(pub);
+  const signatures: string[] = [];
+  for (const hashHex of skel.tosign) {
+    const sig = secp.sign(hexToBytes(hashHex), priv, { lowS: true });
+    signatures.push(sigToDERHex(sig.r, sig.s));
+  }
+  const pubkeys = skel.tosign.map(() => pubHex);
+
+  // 3) send
+  const sendRes = await fetch(`${API}/txs/send${q}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...skel, signatures, pubkeys }),
+  });
+  if (!sendRes.ok) {
+    const t = await sendRes.text();
+    throw new Error(`ltc tx/send ${sendRes.status}: ${t.slice(0, 200)}`);
+  }
+  const sent = await sendRes.json() as { tx: { hash: string; fees?: number } };
+  return { txid: sent.tx.hash, feeLtc: (sent.tx.fees ?? skel.fees ?? 0) / 1e8 };
+}
+
+/** bigint → 大端バイト列 (先頭バイトの最上位 bit が立っていたら 0x00 を prepend して符号つき整数化) */
+function intToDerBytes(n: bigint): Uint8Array {
+  let hex = n.toString(16);
+  if (hex.length % 2) hex = '0' + hex;
+  let bytes = hexToBytes(hex);
+  if (bytes[0] & 0x80) {
+    const padded = new Uint8Array(bytes.length + 1);
+    padded.set(bytes, 1);
+    bytes = padded;
+  }
+  return bytes;
+}
+function sigToDERHex(r: bigint, s: bigint): string {
+  const rb = intToDerBytes(r);
+  const sb = intToDerBytes(s);
+  const total = 2 + rb.length + 2 + sb.length;
+  const out = new Uint8Array(2 + total);
+  let o = 0;
+  out[o++] = 0x30; out[o++] = total;
+  out[o++] = 0x02; out[o++] = rb.length; out.set(rb, o); o += rb.length;
+  out[o++] = 0x02; out[o++] = sb.length; out.set(sb, o); o += sb.length;
+  return bytesToHex(out);
+}
+
+function hexToBytes(h: string): Uint8Array {
+  if (h.length % 2) throw new Error('bad hex');
+  const o = new Uint8Array(h.length / 2);
+  for (let i = 0; i < o.length; i++) o[i] = parseInt(h.slice(i*2, i*2+2), 16);
+  return o;
+}
+function bytesToHex(b: Uint8Array): string {
+  return Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
+}
+
+/** BlockCypher で新規アドレス + 秘密鍵ペアを生成 (HOT ウォレット用). */
+export async function generateLtcHotAddress(): Promise<{ address: string; priv: string; pub: string }> {
+  const token = process.env.LTC_API_TOKEN;
+  if (!token) throw new Error('LTC_API_TOKEN not set');
+  const r = await fetch(`${API}/addrs?token=${token}`, { method: 'POST' });
+  if (!r.ok) throw new Error(`addrs ${r.status}`);
+  const j = await r.json() as { address: string; private: string; public: string };
+  return { address: j.address, priv: j.private, pub: j.public };
 }

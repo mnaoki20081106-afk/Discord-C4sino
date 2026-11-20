@@ -153,11 +153,32 @@ async function cmdWallet(i: ChatInputCommandInteraction) {
   }
   if (sub === 'add-ltc') {
     const label = i.options.getString('label', true);
-    const address = i.options.getString('address', true).trim();
-    if (!/^[A-HJ-NP-Za-km-z1-9]{25,100}$|^ltc1[0-9a-z]{25,100}$/.test(address))
-      return i.reply({ content: 'LTC アドレスの形式が不正です', flags: MessageFlags.Ephemeral });
-    const id = wallets.addLtcWallet(i.user.id, label, address);
-    return i.reply({ content: `✅ LTC ウォレット追加 (id=${id})`, flags: MessageFlags.Ephemeral });
+    const address = i.options.getString('address')?.trim();
+    if (address) {
+      if (!/^[A-HJ-NP-Za-km-z1-9]{25,100}$|^ltc1[0-9a-z]{25,100}$/.test(address))
+        return i.reply({ content: 'LTC アドレスの形式が不正です', flags: MessageFlags.Ephemeral });
+      const id = wallets.addLtcWallet(i.user.id, label, address);
+      return i.reply({ content: `✅ LTC ウォレット (view-only) 追加 id=${id}`, flags: MessageFlags.Ephemeral });
+    }
+    // address 省略: BlockCypher でホットウォレット生成
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const { generateLtcHotAddress } = await import('./payments/ltc.js');
+      const g = await generateLtcHotAddress();
+      const derivation = JSON.stringify({ priv: g.priv, pub: g.pub });
+      const id = wallets.addLtcWallet(i.user.id, label, g.address, derivation);
+      const embed = new EmbedBuilder()
+        .setTitle(`✅ LTC HOT ウォレット生成 id=${id}`)
+        .setColor(0x22c55e)
+        .setDescription('**自動出金対応**。このアドレスに運営資金を送って hot wallet 残高を作ってください。')
+        .addFields(
+          { name: 'Address', value: `\`${g.address}\`` },
+          { name: '⚠️ 注意', value: '秘密鍵が DB に平文保存されています。大金の保管は非推奨、必要分だけ送金してください。' },
+        );
+      return i.editReply({ embeds: [embed] });
+    } catch (e: any) {
+      return i.editReply(`❌ ${e.message}`);
+    }
   }
   if (sub === 'list') {
     const rows = wallets.listWallets();
@@ -1176,11 +1197,19 @@ async function onModal(i: ModalSubmitInteraction) {
       const adminCh = i.guildId ? getAdminChannel(i.guildId) : null;
       const r = await withdraw.withdrawLtc(client, adminCh, { discordId: i.user.id, method: 'ltc', amountJpy: amt, dest: addr });
       invalidateLiquidityCache();
-      await i.editReply(
-        `✅ LTC 出金 #${r.id} 受付完了。\n` +
-        `送信予定: **${r.ltcAmount} LTC** → \`${addr}\`\n` +
-        `管理者が実送金次第、DM で txid を通知します。`
-      );
+      if (r.auto && r.txid) {
+        await i.editReply(
+          `✅ LTC 出金 #${r.id} 送信完了\n` +
+          `**${r.ltcAmount} LTC** → \`${addr}\`\n` +
+          `txid: \`${r.txid}\`  (ネットワーク反映まで数分〜十数分)`
+        );
+      } else {
+        await i.editReply(
+          `✅ LTC 出金 #${r.id} 受付完了\n` +
+          `**${r.ltcAmount} LTC** → \`${addr}\`\n` +
+          `処理には少し時間がかかります。完了次第 DM で txid をお知らせします。`
+        );
+      }
     } catch (e: any) {
       await i.editReply(`❌ ${e.message}`);
     }

@@ -36,6 +36,20 @@ export function addLtcWallet(ownerId: string, label: string, address: string, de
   return s.run(label, address, derivation ?? null, ownerId).lastInsertRowid as number;
 }
 
+export interface LtcHotKey { priv: string; pub: string; address?: string; }
+/** 秘密鍵をもつ (= 自動送金可能な) LTC ホットウォレット一覧 */
+export function listLtcHotWallets(): Array<Wallet & { key: LtcHotKey }> {
+  const rows = db.prepare(`SELECT * FROM wallets WHERE kind='ltc' AND enabled=1 AND derivation IS NOT NULL`).all() as Wallet[];
+  const out: Array<Wallet & { key: LtcHotKey }> = [];
+  for (const w of rows) {
+    try {
+      const d = JSON.parse(w.derivation!);
+      if (d && d.priv && d.pub) out.push({ ...w, key: d });
+    } catch { /* skip malformed */ }
+  }
+  return out;
+}
+
 export function addPaypayWallet(ownerId: string, label: string, phone: string, tokens: pp.LoginFinishResp): number {
   const s = db.prepare(`INSERT INTO wallets(kind,label,enabled,phone,access_token,refresh_token,device_uuid,external_user_id,display_name,owner_id)
     VALUES ('paypay',?,1,?,?,?,?,?,?,?)`);

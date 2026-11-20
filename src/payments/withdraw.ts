@@ -2,7 +2,7 @@ import { Client, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } fr
 import { db, txCredit, getBalance } from '../db/schema.js';
 import * as pp from './paypay-client.js';
 import * as wallets from './wallets.js';
-import { ltcJpyRate } from './ltc.js';
+import { ltcJpyRate, sendLtc, addressBalanceLtc } from './ltc.js';
 import { MIN_WITHDRAW_JPY, LTC_NETWORK_FEE_JPY } from './limits.js';
 
 export interface WithdrawReq {
@@ -82,10 +82,11 @@ export async function withdrawPayPay(client: Client, r: WithdrawReq): Promise<{ 
 }
 
 /**
- * LTC 出金: 管理チャンネルに承認カードを投稿し、admin が実送金 → Mark Sent。
- * chip は申請時に即焼却 (審査中にキャンセル時は払戻し)。
+ * LTC 出金:
+ *   1. 秘密鍵付き HOT ウォレット (derivation あり) で残高が足りるものがあれば **即自動送金**
+ *   2. 無ければ従来通り admin 承認キューに流す
  */
-export async function withdrawLtc(client: Client, adminChannelId: string | null, r: WithdrawReq): Promise<{ id: number; ltcAmount: number }> {
+export async function withdrawLtc(client: Client, adminChannelId: string | null, r: WithdrawReq): Promise<{ id: number; ltcAmount: number; auto: boolean; txid?: string }> {
   if (r.amountJpy < MIN_WITHDRAW_JPY.ltc) throw new Error(`LTC の最低出金額は ¥${MIN_WITHDRAW_JPY.ltc.toLocaleString()} です`);
   if (!r.dest) throw new Error('LTC アドレスが未指定');
   if (!/^[A-HJ-NP-Za-km-z1-9]{25,100}$|^ltc1[0-9a-z]{25,100}$/.test(r.dest)) throw new Error('LTC アドレスの形式が不正');
@@ -95,11 +96,11 @@ export async function withdrawLtc(client: Client, adminChannelId: string | null,
   const netJpy = Math.max(0, r.amountJpy - LTC_NETWORK_FEE_JPY);
   const ltcAmount = +(netJpy / rate).toFixed(8);
 
+  // chip 焼却 → DB 行を pending で作成
   const stmt = db.prepare(`INSERT INTO withdrawals(discord_id, method, amount_jpy, fee_jpy, net_jpy, dest, status)
     VALUES (?, 'ltc', ?, ?, ?, ?, 'pending')`);
   const info = stmt.run(r.discordId, r.amountJpy, LTC_NETWORK_FEE_JPY, netJpy, r.dest);
   const id = info.lastInsertRowid as number;
-
   try {
     txCredit(r.discordId, -r.amountJpy, 'withdraw:ltc', String(id));
   } catch (e) {
@@ -107,13 +108,52 @@ export async function withdrawLtc(client: Client, adminChannelId: string | null,
     throw e;
   }
 
+  // ─── 1. 自動送金を試みる ───
+  const hots = wallets.listLtcHotWallets();
+  for (const w of hots) {
+    if (!w.address) continue;
+    let bal = 0;
+    try { bal = await addressBalanceLtc(w.address); } catch { continue; }
+    if (bal < ltcAmount + 0.0001) continue;     // fee ぶん余分に見る
+
+    try {
+      const sent = await sendLtc(w.address, w.key.priv, r.dest, ltcAmount);
+      db.prepare('UPDATE withdrawals SET status="sent", wallet_id=?, tx_ref=?, completed_at=strftime("%s","now") WHERE id=?')
+        .run(w.id, sent.txid, id);
+      wallets.touchUsed(w.id);
+
+      // ユーザーに DM
+      try {
+        const user = await client.users.fetch(r.discordId);
+        const embed = new EmbedBuilder()
+          .setTitle(`💠 LTC 出金完了 — ${ltcAmount} LTC`)
+          .setColor(0x22c55e)
+          .addFields(
+            { name: 'To',     value: `\`${r.dest}\`` },
+            { name: 'Amount', value: `${ltcAmount} LTC (≈ ¥${netJpy.toLocaleString()})`, inline: true },
+            { name: 'Fee',    value: `¥${LTC_NETWORK_FEE_JPY} + network`, inline: true },
+            { name: 'txid',   value: `\`${sent.txid}\`` },
+          )
+          .setFooter({ text: `Withdrawal #${id} · ネットワーク反映は数分〜十数分` });
+        await user.send({ embeds: [embed] });
+      } catch { /* DM 失敗は致命でない */ }
+
+      return { id, ltcAmount, auto: true, txid: sent.txid };
+    } catch (e) {
+      console.warn(`[withdraw-ltc] auto send failed on wallet #${w.id}: ${(e as Error).message}`);
+      // 次の hot wallet で再試行
+    }
+  }
+
+  // ─── 2. フォールバック: admin 承認 ───
   if (adminChannelId) {
     try {
       const ch = await client.channels.fetch(adminChannelId);
       if (ch && 'send' in ch) {
         const embed = new EmbedBuilder()
-          .setTitle('🔔 LTC 出金申請')
+          .setTitle('🔔 LTC 出金申請 (手動)')
           .setColor(0xf59e0b)
+          .setDescription('自動送金可能な HOT ウォレット残高が不足しています。手動で送金してください。')
           .addFields(
             { name: 'User',    value: `<@${r.discordId}>`, inline: true },
             { name: 'Amount',  value: `¥${r.amountJpy.toLocaleString()}`, inline: true },
@@ -135,7 +175,7 @@ export async function withdrawLtc(client: Client, adminChannelId: string | null,
     }
   }
 
-  return { id, ltcAmount };
+  return { id, ltcAmount, auto: false };
 }
 
 export function markLtcSent(id: number, txid: string) {
