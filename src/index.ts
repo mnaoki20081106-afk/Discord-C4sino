@@ -16,6 +16,7 @@ import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
 import { L } from './ui/leet.js';
+import { gameOverview, type GameKey } from './ui/overview.js';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
@@ -62,7 +63,13 @@ async function onCommand(i: ChatInputCommandInteraction) {
     case 'wallet':   return cmdWallet(i);
     case 'admin':    return cmdAdmin(i);
     case 'pay':      return cmdPay(i);
+    case 'overview': return cmdOverview(i);
   }
+}
+
+async function cmdOverview(i: ChatInputCommandInteraction) {
+  const g = (i.options.getString('game') ?? 'all') as GameKey;
+  await i.reply({ embeds: [gameOverview(g)], flags: MessageFlags.Ephemeral });
 }
 
 async function cmdPay(i: ChatInputCommandInteraction) {
@@ -243,6 +250,9 @@ async function onButton(i: ButtonInteraction) {
   if (ns === 'slot') return onSlotButton(i, kind, arg);
   if (ns === 'dep') return onDepositButton(i, kind, arg);
   if (ns === 'adm') return onAdminButton(i, kind);
+  if (ns === 'ov') {
+    return i.reply({ embeds: [gameOverview(kind as GameKey)], flags: MessageFlags.Ephemeral });
+  }
   if (ns === 'bal') {
     const bal = getBalance(i.user.id);
     return i.reply({ content: `💰 残高: **${bal.toLocaleString()} ${L('chips')}**`, flags: MessageFlags.Ephemeral });
@@ -414,7 +424,7 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
       bet, balance: getBalance(i.user.id),
       payoutMult: spinning ? 0 : result.payoutMult,
       spinning,
-      label: !spinning && result.payoutMult >= 100 ? (result.payoutMult >= 1000 ? L('JACKPOT') : `${L('BIG')} ${L('WIN')}`) : L('WIN'),
+      label: !spinning && result.payoutMult >= 200 ? (result.payoutMult >= 2000 ? L('JACKPOT') : `${L('BIG')} ${L('WIN')}`) : L('WIN'),
     });
     await i.editReply({ files: [new AttachmentBuilder(buf, { name: 's.png' })] });
   }

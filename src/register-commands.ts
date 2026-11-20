@@ -15,6 +15,16 @@ const balance = new SlashCommandBuilder()
   .setName('balance')
   .setDescription('残高を確認');
 
+const overview = new SlashCommandBuilder()
+  .setName('overview')
+  .setDescription('ゲーム概要・期待値 (RTP) を確認')
+  .addStringOption(o => o.setName('game').setDescription('ゲーム (省略で全体)').setRequired(false)
+    .addChoices(
+      { name: 'All (全ゲーム概要)', value: 'all' },
+      { name: 'Blackjack',          value: 'blackjack' },
+      { name: 'Slots',              value: 'slots' },
+    ));
+
 const pay = new SlashCommandBuilder()
   .setName('pay')
   .setDescription('入金 — 支払い方法を選択してチップを購入')
@@ -63,7 +73,7 @@ const admin = new SlashCommandBuilder()
     .addIntegerOption(o => o.setName('limit').setDescription('件数').setRequired(false)))
   .addSubcommand(s => s.setName('panel').setDescription('管理パネルをこのチャンネルに設置'));
 
-const commands = [setup, balance, pay, wallet, admin].map(c => c.toJSON());
+const commands = [setup, balance, overview, pay, wallet, admin].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN!);
 const clientId = process.env.DISCORD_CLIENT_ID!;

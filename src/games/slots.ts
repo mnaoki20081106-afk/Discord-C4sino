@@ -1,15 +1,15 @@
 import { randomInt } from 'node:crypto';
 
-// シンボル。重み(合計=100)でRTP調整。現状 RTP ~ 94-96%
+// シンボル。重み(合計=100)。配当はオンカジ的 RTP ≈ 94–95% に調整済み。
 export const SYMBOLS = [
-  { id: '🍒', w: 28, pay3: 5,   pay2: 1   },
-  { id: '🍋', w: 22, pay3: 8,   pay2: 0   },
-  { id: '🍊', w: 16, pay3: 12,  pay2: 0   },
-  { id: '🍉', w: 12, pay3: 20,  pay2: 0   },
-  { id: '⭐', w: 10, pay3: 40,  pay2: 0   },
-  { id: '🔔', w:  7, pay3: 80,  pay2: 0   },
-  { id: '💎', w:  4, pay3: 200, pay2: 0   },
-  { id: '7️⃣', w: 1, pay3: 1000, pay2: 0   },
+  { id: '🍒', w: 28, pay3: 12,   pay2: 2   },
+  { id: '🍋', w: 22, pay3: 18,   pay2: 0   },
+  { id: '🍊', w: 16, pay3: 28,   pay2: 0   },
+  { id: '🍉', w: 12, pay3: 46,   pay2: 0   },
+  { id: '⭐', w: 10, pay3: 92,   pay2: 0   },
+  { id: '🔔', w:  7, pay3: 184,  pay2: 0   },
+  { id: '💎', w:  4, pay3: 460,  pay2: 0   },
+  { id: '7️⃣', w: 1, pay3: 2300, pay2: 0   },
 ] as const;
 export type Symbol = typeof SYMBOLS[number];
 

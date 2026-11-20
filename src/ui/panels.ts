@@ -19,7 +19,10 @@ export function blackjackPanel() {
     new ButtonBuilder().setCustomId('bj:bet:5000').setLabel(`${L('BET')} 5,000`).setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('bj:bet:custom').setLabel(L('CUSTOM')).setStyle(ButtonStyle.Success),
   );
-  return { embeds: [embed], components: [row1] };
+  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('ov:blackjack').setLabel('📒 概要 / RTP').setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row1, row2] };
 }
 
 export function slotsPanel() {
@@ -28,8 +31,9 @@ export function slotsPanel() {
     .setDescription('3リール・8シンボル。7️⃣ 揃いで **x1000**！')
     .setColor(0x2d0a4e)
     .addFields(
-      { name: L('Pays'), value: `🍒🍒🍒 x5 · 🍋🍋🍋 x8 · 🍊🍊🍊 x12 · 🍉🍉🍉 x20\n⭐⭐⭐ x40 · 🔔🔔🔔 x80 · 💎💎💎 x200 · 7️⃣7️⃣7️⃣ **x1000**`, inline: false },
-      { name: L('Side'), value: '🍒🍒? **x1**', inline: true },
+      { name: L('Pays'), value: `🍒🍒🍒 x12 · 🍋🍋🍋 x18 · 🍊🍊🍊 x28 · 🍉🍉🍉 x46\n⭐⭐⭐ x92 · 🔔🔔🔔 x184 · 💎💎💎 x460 · 7️⃣7️⃣7️⃣ **x2300**`, inline: false },
+      { name: L('Side'), value: '🍒🍒? **x2**', inline: true },
+      { name: 'RTP',    value: '≈ 95%', inline: true },
     )
     .setFooter({ text: `Discord C4sino · ${L('Slot')} A-01` });
 
@@ -40,7 +44,10 @@ export function slotsPanel() {
     new ButtonBuilder().setCustomId('slot:spin:1000').setLabel(`${L('SPIN')} 1,000`).setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId('slot:spin:custom').setLabel(L('CUSTOM')).setStyle(ButtonStyle.Success),
   );
-  return { embeds: [embed], components: [row] };
+  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('ov:slots').setLabel('📒 概要 / RTP').setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row, row2] };
 }
 
 export function depositPanel() {
