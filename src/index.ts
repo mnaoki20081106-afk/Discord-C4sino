@@ -710,20 +710,39 @@ async function doRouletteSpin(
     return eased * total;
   });
 
-  const first = await renderRoulette({
-    betLabel: label, betAmount: bet, balance: getBalance(i.user.id),
-    resultNumber: result, ballAngle: 0, spinning: true, payoutMult: 0,
+  const buildRouEmbed = (spinning: boolean, finalMult: number) => {
+    const color = spinning ? 0x3b82f6 : finalMult > 0 ? 0x22c55e : 0xef4444;
+    const e = new EmbedBuilder().setTitle(`🎡 ${L('ROULETTE')}`).setColor(color).setImage('attachment://r.png');
+    if (spinning) {
+      e.setDescription(`${L('SPINNING')}… bet: **${label}**`);
+    } else {
+      const col = result === 0 ? '🟩' : (result % 2 === 1 ? '🟥' : '⬛');
+      const win = bet * finalMult;
+      const net = win - bet;
+      e.setDescription(finalMult > 0 ? `**${L('YOU')} ${L('WIN')}!** +${net.toLocaleString()} ${L('chips')}` : `**${L('LOSE')}** ${(-bet).toLocaleString()} ${L('chips')}`);
+      e.addFields(
+        { name: 'Result', value: `${col} **${result}**`, inline: true },
+        { name: L('Bet'), value: `${label} ${bet.toLocaleString()}`, inline: true },
+        { name: L('Balance'), value: `${getBalance(i.user.id).toLocaleString()}`, inline: true },
+      );
+    }
+    return e;
+  };
+
+  const first = await renderRoulette({ resultNumber: result, ballAngle: 0, spinning: true });
+  await i.reply({
+    embeds: [buildRouEmbed(true, 0)],
+    files: [new AttachmentBuilder(first, { name: 'r.png' })],
+    flags: MessageFlags.Ephemeral,
   });
-  await i.reply({ files: [new AttachmentBuilder(first, { name: 'r.png' })], flags: MessageFlags.Ephemeral });
   for (let f = 0; f < frames; f++) {
     await new Promise(r => setTimeout(r, 700));
     const spinning = f < frames - 1;
-    const buf = await renderRoulette({
-      betLabel: label, betAmount: bet, balance: getBalance(i.user.id),
-      resultNumber: result, ballAngle: angles[f], spinning, payoutMult: spinning ? 0 : mult,
-      label: mult >= 20 ? L('BIG WIN') : L('WIN'),
+    const buf = await renderRoulette({ resultNumber: result, ballAngle: angles[f], spinning });
+    await i.editReply({
+      embeds: [buildRouEmbed(spinning, mult)],
+      files: [new AttachmentBuilder(buf, { name: 'r.png' })],
     });
-    await i.editReply({ files: [new AttachmentBuilder(buf, { name: 'r.png' })] });
   }
 
   if (mult > 0) {
@@ -765,12 +784,12 @@ async function onCrapsButton(i: ButtonInteraction, kind: string, _arg: string) {
   if (kind === 'end') {
     clearCrapsExposure(sid);
     sessions.drop(sid);
-    const final = await renderCraps({ state: st, balance: getBalance(i.user.id) });
+    const final = await renderCraps({ state: st });
     const net = st.totalReturned - st.totalWagered;
     const embed = new EmbedBuilder()
       .setImage('attachment://craps-end.png')
       .setColor(net > 0 ? 0x22c55e : net < 0 ? 0xef4444 : 0x9ca3af)
-      .setTitle(`${L('CRAPS')} セッション終了`)
+      .setTitle(`🎲 ${L('CRAPS')} セッション終了`)
       .setDescription(`累計 ${net>=0?'+':''}${net.toLocaleString()} ${L('chips')} (賭 ${st.totalWagered.toLocaleString()} / 戻 ${st.totalReturned.toLocaleString()})`);
     return i.update({
       embeds: [embed],
@@ -785,18 +804,41 @@ async function onCrapsButton(i: ButtonInteraction, kind: string, _arg: string) {
   }
 }
 
+function buildCrapsEmbed(sid: string, st: CrapsState, balance: number): EmbedBuilder {
+  const net = st.totalReturned - st.totalWagered;
+  const color = st.phase === 'comeout' ? 0x3b82f6 : 0xf59e0b;
+  const header = st.phase === 'comeout'
+    ? `**COME OUT** — 7/11 勝ち / 2/3/12 クラップス / 4-10 point 成立`
+    : `**POINT ${st.point}** — ${st.point} 再出で Pass 勝ち / 7 で Seven-Out`;
+  const betsText = st.bets.length
+    ? st.bets.slice(-10).map(b => `\`#${b.id}\` ${b.kind}${b.point?`→${b.point}`:''} **${b.amount.toLocaleString()}**`).join('\n') + (st.bets.length>10?`\n…他${st.bets.length-10}件`:'')
+    : '_ベットなし_';
+  const histText = st.history.length ? st.history.slice(-5).join('\n') : '_まだ振られていません_';
+  return new EmbedBuilder()
+    .setTitle(`🎲 ${L('CRAPS')}`)
+    .setColor(color)
+    .setDescription(header)
+    .addFields(
+      { name: `アクティブなベット (${st.bets.length})`, value: betsText, inline: false },
+      { name: '直近の振り', value: histText.length > 1000 ? histText.slice(-1000) : histText, inline: false },
+      { name: L('Balance'), value: `${balance.toLocaleString()} ${L('chips')}`, inline: true },
+      { name: '累計', value: `${net>=0?'+':''}${net.toLocaleString()} (賭 ${st.totalWagered.toLocaleString()} / 戻 ${st.totalReturned.toLocaleString()})`, inline: true },
+    )
+    .setFooter({ text: `sid=${sid}` });
+}
+
 async function sendCrapsEphemeral(i: ButtonInteraction, sid: string, st: CrapsState) {
-  const buf = await renderCraps({ state: st, balance: getBalance(i.user.id) });
+  const buf = await renderCraps({ state: st });
   const file = new AttachmentBuilder(buf, { name: 'craps.png' });
-  const embed = new EmbedBuilder().setImage('attachment://craps.png').setColor(0x0d5a3a).setFooter({ text: `sid=${sid}` });
+  const embed = buildCrapsEmbed(sid, st, getBalance(i.user.id)).setImage('attachment://craps.png');
   const rows = crapsControlRows({ phase: st.phase, point: st.point, betCount: st.bets.length });
   await i.reply({ embeds: [embed], files: [file], components: rows, flags: MessageFlags.Ephemeral });
 }
 
 async function updateCrapsMessage(i: ButtonInteraction, sid: string, st: CrapsState) {
-  const buf = await renderCraps({ state: st, balance: getBalance(i.user.id) });
+  const buf = await renderCraps({ state: st });
   const file = new AttachmentBuilder(buf, { name: 'craps.png' });
-  const embed = new EmbedBuilder().setImage('attachment://craps.png').setColor(0x0d5a3a).setFooter({ text: `sid=${sid}` });
+  const embed = buildCrapsEmbed(sid, st, getBalance(i.user.id)).setImage('attachment://craps.png');
   const rows = crapsControlRows({ phase: st.phase, point: st.point, betCount: st.bets.length });
   await i.update({ embeds: [embed], files: [file], components: rows, attachments: [] });
 }
@@ -828,10 +870,9 @@ async function placeCrapsBet(i: ModalSubmitInteraction, sid: string, kind: Craps
   setCrapsExposure(sid, openExposure(st));
 
   await i.deferUpdate().catch(()=>{});
-  // 編集可能なのは直前のメッセージなので editReply
-  const buf = await renderCraps({ state: st, balance: getBalance(i.user.id) });
+  const buf = await renderCraps({ state: st });
   const file = new AttachmentBuilder(buf, { name: 'craps.png' });
-  const embed = new EmbedBuilder().setImage('attachment://craps.png').setColor(0x0d5a3a).setFooter({ text: `sid=${sid}` });
+  const embed = buildCrapsEmbed(sid, st, getBalance(i.user.id)).setImage('attachment://craps.png');
   const rows = crapsControlRows({ phase: st.phase, point: st.point, betCount: st.bets.length });
   await i.editReply({ embeds: [embed], files: [file], components: rows, attachments: [] });
 }
@@ -910,20 +951,31 @@ async function doBaccarat(i: ModalSubmitInteraction, side: BacSide, bet: number)
 
   const r = dealBaccaratWithCap(side, bet, await housePayoutCap());
   const mult = bacPayout(side, r.winner);
+  const payout = mult > 0 ? await clampPayout(Math.floor(bet * mult)) : 0;
+  if (payout > 0) txCredit(i.user.id, payout, 'win:baccarat');
 
-  const buf = await renderBaccarat({
-    player: r.player, banker: r.banker,
-    playerTotal: r.playerTotal, bankerTotal: r.bankerTotal, winner: r.winner,
-    side, betAmount: bet, balance: getBalance(i.user.id),
-    payoutMult: mult, label: mult >= 8 ? L('BIG WIN') : L('WIN'),
-  });
-  await i.reply({ files: [new AttachmentBuilder(buf, { name: 'bac.png' })], flags: MessageFlags.Ephemeral });
+  const buf = await renderBaccarat({ player: r.player, banker: r.banker });
+  const file = new AttachmentBuilder(buf, { name: 'bac.png' });
+  const net = payout - bet;
+  const color = net > 0 ? 0x22c55e : net < 0 ? 0xef4444 : 0x9ca3af;
+  const winnerLabel = r.winner === 'tie' ? L('TIE') : r.winner === 'player' ? `${L('PLAYER')} ${L('WINS')}` : `${L('BANKER')} ${L('WINS')}`;
+  const msg = net > 0 ? `**${L('YOU')} ${L('WIN')}!** +${net.toLocaleString()} ${L('chips')}`
+            : net < 0 ? `**${L('LOSE')}** ${net.toLocaleString()} ${L('chips')}`
+            :          `**${L('PUSH')}**`;
+  const embed = new EmbedBuilder()
+    .setTitle(`🎴 ${L('BACCARAT')}`)
+    .setColor(color)
+    .setDescription(`${winnerLabel}  —  ${msg}`)
+    .addFields(
+      { name: L('Player'), value: `**${r.playerTotal}**`, inline: true },
+      { name: L('Banker'), value: `**${r.bankerTotal}**`, inline: true },
+      { name: L('Bet'),    value: `${side} ${bet.toLocaleString()}`, inline: true },
+      { name: L('Balance'), value: `${getBalance(i.user.id).toLocaleString()}`, inline: true },
+    )
+    .setImage('attachment://bac.png');
+  await i.reply({ embeds: [embed], files: [file], flags: MessageFlags.Ephemeral });
 
-  if (mult > 0) {
-    const payout = await clampPayout(Math.floor(bet * mult));
-    if (payout > 0) txCredit(i.user.id, payout, 'win:baccarat');
-    if (mult > 1) await onGameSettled(i, 'baccarat', null, bet, payout);
-  }
+  if (mult > 1) await onGameSettled(i, 'baccarat', null, bet, payout);
 }
 
 /* ────────────── VIDEO POKER ────────────── */
@@ -977,28 +1029,53 @@ async function startVpSession(i: ButtonInteraction | ModalSubmitInteraction, bet
   await sendVpEphemeral(i as ButtonInteraction, entry.id, bet, st);
 }
 
-async function sendVpEphemeral(i: ButtonInteraction, sid: string, bet: number, st: VPHand) {
+const VP_RANK_LABEL: Record<string, string> = {
+  royal_flush: 'Royal Flush',
+  straight_flush: 'Straight Flush',
+  four_of_a_kind: 'Four of a Kind',
+  full_house: 'Full House',
+  flush: 'Flush',
+  straight: 'Straight',
+  three_of_a_kind: 'Three of a Kind',
+  two_pair: 'Two Pair',
+  jacks_or_better: 'Jacks or Better',
+  nothing: 'No Win',
+};
+
+function buildVpEmbed(sid: string, bet: number, balance: number, st: VPHand): EmbedBuilder {
   const mult = st.phase === 'drawn' && st.rank ? payoutFor(st.rank) : 0;
-  const buf = await renderVideoPoker({
-    cards: st.cards, held: st.held, phase: st.phase, rank: st.rank,
-    bet, balance: getBalance(i.user.id), payoutMult: mult,
-    label: mult >= 500 ? L('JACKPOT') : mult >= 20 ? L('BIG WIN') : L('WIN'),
-  });
+  const win = Math.floor(bet * mult);
+  const net = win - bet;
+  const color = st.phase === 'deal' ? 0x3b82f6 : net > 0 ? 0x22c55e : 0x9ca3af;
+  const e = new EmbedBuilder().setTitle(`🃏 ${L('VIDEO POKER')}`).setColor(color).setFooter({ text: `sid=${sid}` });
+  if (st.phase === 'deal') {
+    e.setDescription('HOLD したいカードのボタンを押して [🎴 DRAW] で引き直し');
+  } else if (st.rank) {
+    const rankLabel = VP_RANK_LABEL[st.rank];
+    e.setDescription(net > 0
+      ? `**${rankLabel}** — ${L('YOU')} ${L('WIN')} +${net.toLocaleString()} ${L('chips')}`
+      : `**${rankLabel}** — ${L('LOSE')} ${(-bet).toLocaleString()} ${L('chips')}`);
+  }
+  e.addFields(
+    { name: L('Bet'), value: `${bet.toLocaleString()} ${L('chips')}`, inline: true },
+    { name: L('Balance'), value: `${balance.toLocaleString()}`, inline: true },
+    ...(mult > 0 ? [{ name: 'Mult', value: `×${mult}`, inline: true }] : []),
+  );
+  return e;
+}
+
+async function sendVpEphemeral(i: ButtonInteraction, sid: string, bet: number, st: VPHand) {
+  const buf = await renderVideoPoker({ cards: st.cards, held: st.held, phase: st.phase });
   const file = new AttachmentBuilder(buf, { name: 'vp.png' });
-  const embed = new EmbedBuilder().setImage('attachment://vp.png').setColor(0x2d0a4e).setFooter({ text: `sid=${sid}` });
+  const embed = buildVpEmbed(sid, bet, getBalance(i.user.id), st).setImage('attachment://vp.png');
   const rows = st.phase === 'deal' ? vpHoldRow(st.held) : [];
   await (i as any).reply({ embeds: [embed], files: [file], components: rows, flags: MessageFlags.Ephemeral });
 }
 
 async function updateVpMessage(i: ButtonInteraction, sid: string, bet: number, st: VPHand) {
-  const mult = st.phase === 'drawn' && st.rank ? payoutFor(st.rank) : 0;
-  const buf = await renderVideoPoker({
-    cards: st.cards, held: st.held, phase: st.phase, rank: st.rank,
-    bet, balance: getBalance(i.user.id), payoutMult: mult,
-    label: mult >= 500 ? L('JACKPOT') : mult >= 20 ? L('BIG WIN') : L('WIN'),
-  });
+  const buf = await renderVideoPoker({ cards: st.cards, held: st.held, phase: st.phase });
   const file = new AttachmentBuilder(buf, { name: 'vp.png' });
-  const embed = new EmbedBuilder().setImage('attachment://vp.png').setColor(0x2d0a4e).setFooter({ text: `sid=${sid}` });
+  const embed = buildVpEmbed(sid, bet, getBalance(i.user.id), st).setImage('attachment://vp.png');
   const rows = st.phase === 'deal' ? vpHoldRow(st.held) : [];
   await i.update({ embeds: [embed], files: [file], components: rows, attachments: [] });
 }

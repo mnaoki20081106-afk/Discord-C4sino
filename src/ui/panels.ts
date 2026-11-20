@@ -26,8 +26,8 @@ export function blackjackPanel() {
 export function slotsPanel() {
   const embed = new EmbedBuilder()
     .setTitle(`🎰  ${L('C4SINO')} ${L('SLOTS')}  🎰`)
-    .setDescription('3リール・8シンボル。7️⃣ 揃いで **x1000**！')
-    .setColor(0x2d0a4e)
+    .setDescription('3リール・8シンボル。7️⃣ 揃いで **x2300**！')
+    .setColor(0x7f1d1d)
     .addFields(
       { name: L('Pays'), value: `🍒🍒🍒 x12 · 🍋🍋🍋 x18 · 🍊🍊🍊 x28 · 🍉🍉🍉 x46\n⭐⭐⭐ x92 · 🔔🔔🔔 x184 · 💎💎💎 x460 · 7️⃣7️⃣7️⃣ **x2300**`, inline: false },
       { name: L('Side'), value: '🍒🍒? **x2**', inline: true },
@@ -109,7 +109,7 @@ export function videopokerPanel() {
   const embed = new EmbedBuilder()
     .setTitle(`🃏  ${L('VIDEO POKER')} — ${L('JACKS OR BETTER')}  🃏`)
     .setDescription('5 枚の手札を見て、残したいカードを HOLD、[DRAW] で引き直し。役を作って勝利。')
-    .setColor(0x2d0a4e)
+    .setColor(0x1e293b)
     .addFields(
       { name: L('Pays'), value:
         '`Royal Flush  ×800` · `Straight Flush  ×50` · `Four of a Kind  ×25`\n' +

@@ -1,41 +1,34 @@
-import { createCanvas, SKRSContext2D } from '@napi-rs/canvas';
+import { createCanvas } from '@napi-rs/canvas';
 import { WHEEL, color as colorOf } from '../games/roulette.js';
-import { L } from './leet.js';
 
-const W = 720, H = 520;
-
-function roundRect(ctx: SKRSContext2D, x: number, y: number, w: number, h: number, r: number) {
-  ctx.beginPath();
-  ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r);
-  ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath();
-}
+const W = 480, H = 480;
 
 export interface RouletteRenderInput {
-  betLabel: string;
-  betAmount: number;
-  balance: number;
-  resultNumber: number;       // 0..36 (結果or途中値)
-  ballAngle: number;          // ラジアン: ボールの現在位置 (0 = 真上)
-  spinning: boolean;          // true=回転中 / false=停止
-  payoutMult: number;          // 停止後の倍率 (0..) — gross
-  label?: string;
+  resultNumber: number;
+  ballAngle: number;
+  spinning: boolean;
 }
 
 export function renderRoulette(i: RouletteRenderInput): Promise<Buffer> {
   const canvas = createCanvas(W, H);
   const ctx = canvas.getContext('2d');
 
-  // 背景
-  const bg = ctx.createRadialGradient(W/2, H/2, 80, W/2, H/2, 600);
-  bg.addColorStop(0, '#0d5a3a'); bg.addColorStop(1, '#042416');
-  ctx.fillStyle = bg;
+  // 背景 (暗)
+  ctx.fillStyle = '#2b2d31';
   ctx.fillRect(0, 0, W, H);
 
-  // ホイール
-  const cx = W/2, cy = 240, R = 180, rInner = 110;
-  const n = WHEEL.length; // 37
+  const cx = W/2, cy = H/2;
+  const R = 220, rInner = 130;
+  const n = WHEEL.length;
   const seg = (Math.PI * 2) / n;
 
+  // 木目調の外周リング
+  ctx.fillStyle = '#3d1f0a';
+  ctx.beginPath(); ctx.arc(cx, cy, R + 14, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#c9a44a'; ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.arc(cx, cy, R + 14, 0, Math.PI*2); ctx.stroke();
+
+  // セクタ
   for (let k = 0; k < n; k++) {
     const num = WHEEL[k];
     const a0 = -Math.PI/2 + k * seg - seg/2;
@@ -47,77 +40,76 @@ export function renderRoulette(i: RouletteRenderInput): Promise<Buffer> {
     const c = colorOf(num);
     ctx.fillStyle = c === 'red' ? '#c62828' : c === 'black' ? '#111' : '#0d8a3a';
     ctx.fill();
-    ctx.strokeStyle = '#222'; ctx.lineWidth = 0.8; ctx.stroke();
+    ctx.strokeStyle = '#2a1a0a'; ctx.lineWidth = 0.8; ctx.stroke();
 
     // 数字
     const am = (a0 + a1)/2;
-    const tx = cx + Math.cos(am) * (R - 24);
-    const ty = cy + Math.sin(am) * (R - 24);
+    const tx = cx + Math.cos(am) * (R - 28);
+    const ty = cy + Math.sin(am) * (R - 28);
     ctx.save();
     ctx.translate(tx, ty); ctx.rotate(am + Math.PI/2);
     ctx.fillStyle = '#fff';
-    ctx.font = 'bold 12px sans-serif';
+    ctx.font = 'bold 14px sans-serif';
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(String(num), 0, 0);
     ctx.restore();
   }
 
   // 中央ハブ (ゴールド)
-  const hub = ctx.createRadialGradient(cx-10, cy-10, 5, cx, cy, rInner);
-  hub.addColorStop(0, '#f6c84c'); hub.addColorStop(1, '#8a6b1a');
+  const hub = ctx.createRadialGradient(cx-12, cy-12, 6, cx, cy, rInner);
+  hub.addColorStop(0, '#f6d87c');
+  hub.addColorStop(0.6, '#b8862a');
+  hub.addColorStop(1, '#5a3a0a');
   ctx.fillStyle = hub;
   ctx.beginPath(); ctx.arc(cx, cy, rInner, 0, Math.PI*2); ctx.fill();
-  ctx.strokeStyle = '#4a3610'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.strokeStyle = '#2a1a0a'; ctx.lineWidth = 2; ctx.stroke();
 
-  // "C4sino" 中央刻印
-  ctx.fillStyle = '#4a3610';
-  ctx.font = 'bold 20px serif';
+  // 中央 スポーク
+  ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+  ctx.lineWidth = 2;
+  for (let k = 0; k < 8; k++) {
+    const a = k * Math.PI / 4;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * 20, cy + Math.sin(a) * 20);
+    ctx.lineTo(cx + Math.cos(a) * (rInner - 6), cy + Math.sin(a) * (rInner - 6));
+    ctx.stroke();
+  }
+
+  // 中央エンブレム
+  ctx.fillStyle = '#0a0a1a';
+  ctx.beginPath(); ctx.arc(cx, cy, 20, 0, Math.PI*2); ctx.fill();
+  ctx.fillStyle = '#c9a44a';
+  ctx.font = 'bold 14px serif';
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText('C4SINO', cx, cy - 10);
-  ctx.font = '10px serif';
-  ctx.fillText('ROULETTE', cx, cy + 10);
+  ctx.fillText('C', cx, cy);
 
-  // ボール (回転ないし停止時の最終位置)
+  // ボール
   const ballR = R - 6;
   const bx = cx + Math.cos(i.ballAngle - Math.PI/2) * ballR;
   const by = cy + Math.sin(i.ballAngle - Math.PI/2) * ballR;
   ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.6)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 3;
-  const bg2 = ctx.createRadialGradient(bx-3, by-3, 1, bx, by, 8);
-  bg2.addColorStop(0, '#fff'); bg2.addColorStop(1, '#a0a0a0');
-  ctx.fillStyle = bg2;
-  ctx.beginPath(); ctx.arc(bx, by, 7, 0, Math.PI*2); ctx.fill();
+  ctx.shadowColor = 'rgba(0,0,0,0.7)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 3;
+  const bgrad = ctx.createRadialGradient(bx-3, by-3, 1, bx, by, 9);
+  bgrad.addColorStop(0, '#fff'); bgrad.addColorStop(1, '#8a8a8a');
+  ctx.fillStyle = bgrad;
+  ctx.beginPath(); ctx.arc(bx, by, 8, 0, Math.PI*2); ctx.fill();
   ctx.restore();
 
-  // 結果パネル
-  const panelY = 450, panelH = 50;
-  ctx.fillStyle = 'rgba(0,0,0,0.5)';
-  roundRect(ctx, 20, panelY, W-40, panelH, 10); ctx.fill();
-  ctx.strokeStyle = '#d4af37'; ctx.lineWidth = 1.5; roundRect(ctx, 20, panelY, W-40, panelH, 10); ctx.stroke();
-
-  ctx.fillStyle = '#d4af37';
-  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.font = 'bold 14px sans-serif';
-  ctx.fillText(`${L('BET')}: ${i.betLabel}  —  ${i.betAmount.toLocaleString()} ${L('chips')}`, 32, panelY + panelH/2);
-
-  ctx.textAlign = 'right';
-  if (i.spinning) {
-    ctx.fillStyle = '#fff';
-    ctx.fillText(`${L('SPINNING')}…`, W - 32, panelY + panelH/2);
-  } else {
-    const win = i.betAmount * i.payoutMult;
-    const col = colorOf(i.resultNumber);
-    const colLabel = col === 'red' ? '🟥' : col === 'black' ? '⬛' : '🟩';
-    const txt = `${colLabel} ${i.resultNumber}  —  ` +
-      (win > 0 ? `${i.label ?? L('WIN')} +${(win - i.betAmount).toLocaleString()}` : L('LOSE'));
-    ctx.fillStyle = win > 0 ? '#22c55e' : '#ef4444';
-    ctx.font = 'bold 16px sans-serif';
-    ctx.fillText(txt, W - 32, panelY + panelH/2);
+  // 勝利時: 結果番号をハイライト
+  if (!i.spinning) {
+    const idx = WHEEL.indexOf(i.resultNumber);
+    const a0 = -Math.PI/2 + idx * seg - seg/2;
+    const a1 = a0 + seg;
+    ctx.strokeStyle = '#f6d87c';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a0) * R, cy + Math.sin(a0) * R);
+    ctx.arc(cx, cy, R, a0, a1);
+    ctx.lineTo(cx + Math.cos(a1) * (R - 50), cy + Math.sin(a1) * (R - 50));
+    ctx.arc(cx, cy, R - 50, a1, a0, true);
+    ctx.closePath();
+    ctx.stroke();
   }
-
-  // 下部: バランス
-  ctx.textAlign = 'left'; ctx.fillStyle = '#d4af37'; ctx.font = 'bold 12px sans-serif';
-  ctx.fillText(`💰 ${i.balance.toLocaleString()} ${L('chips')}`, 20, H - 12);
 
   return canvas.encode('png');
 }
