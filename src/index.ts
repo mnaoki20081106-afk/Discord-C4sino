@@ -69,7 +69,11 @@ async function cmdPay(i: ChatInputCommandInteraction) {
   assertNotBanned(i.user.id);
   const method = i.options.getString('method', true) as 'paypay' | 'ltc';
   if (method === 'paypay') return openPaypayDepositModal(i);
-  if (method === 'ltc')    return showLtcAddress(i);
+  if (method === 'ltc') {
+    const amount = i.options.getInteger('amount');
+    if (amount && amount > 0) return replyLtcQuote(i, amount);
+    return showLtcAddress(i);
+  }
 }
 
 async function cmdSetup(i: ChatInputCommandInteraction) {
@@ -422,10 +426,14 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
 
 /* ────────────── CASHIER (ユーザー入金) ────────────── */
 
-async function onDepositButton(i: ButtonInteraction, kind: string, _arg: string) {
+async function onDepositButton(i: ButtonInteraction, kind: string, arg: string) {
   assertNotBanned(i.user.id);
   if (kind === 'paypay') return openPaypayDepositModal(i);
-  if (kind === 'ltc')    return showLtcAddress(i);
+  if (kind === 'ltc') {
+    if (arg === 'calc') return openLtcCalcModal(i);
+    if (arg === 'rate') return showLtcAddress(i);
+    return showLtcAddress(i);
+  }
 }
 
 async function onSelect(i: StringSelectMenuInteraction) {
@@ -454,12 +462,56 @@ async function showLtcAddress(i: ButtonInteraction | StringSelectMenuInteraction
   const rate = await ltcJpyRate().catch(() => null);
   const embed = new EmbedBuilder()
     .setTitle('💠 LTC 入金')
-    .setDescription('下記アドレスに LTC を送金してください。**1承認で自動チャージ**されます。')
+    .setDescription('下記アドレスに LTC を送金してください。**1承認で自動チャージ**されます。\nJPY で金額を決めたい場合は下のボタンから計算できます。')
     .addFields(
       { name: 'Address', value: `\`${addr}\`` },
-      ...(rate ? [{ name: L('Rate'), value: `1 LTC ≈ ¥${rate.toLocaleString()}` }] : []),
+      ...(rate ? [
+        { name: L('Rate'), value: `1 LTC ≈ ¥${rate.toLocaleString()}  _(CoinGecko, 取得時刻)_`, inline: false },
+      ] : [{ name: L('Rate'), value: '⚠️ レート取得失敗。しばらくしてから再度お試しください。' }]),
     )
     .setColor(0x345d9d);
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('dep:ltc:calc').setLabel('💱 JPY→LTC 計算').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('dep:ltc:rate').setLabel('🔄 レート再取得').setStyle(ButtonStyle.Secondary),
+  );
+  await i.editReply({ embeds: [embed], components: [row] });
+}
+
+async function openLtcCalcModal(i: ButtonInteraction) {
+  const modal = new ModalBuilder().setCustomId('dep:ltc:calc').setTitle('JPY → LTC 計算')
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId('jpy').setLabel('入金したい金額 (JPY)').setStyle(TextInputStyle.Short)
+          .setPlaceholder('例: 5000').setRequired(true)
+      ),
+    );
+  await i.showModal(modal);
+}
+
+async function replyLtcQuote(i: ModalSubmitInteraction | ButtonInteraction | ChatInputCommandInteraction, jpy: number) {
+  await i.deferReply({ flags: MessageFlags.Ephemeral });
+  if (!Number.isFinite(jpy) || jpy <= 0) return i.editReply('❌ 金額が不正');
+  if (jpy > 10_000_000) return i.editReply('❌ 金額が大きすぎます');
+  const addr = await getOrCreateAddress(i.user.id);
+  const rate = await ltcJpyRate();
+  const ltc  = +(jpy / rate).toFixed(8);              // 1 LTC = rate JPY
+  const fee  = +(0.00010000).toFixed(8);              // 送信手数料目安 (参考)
+  const total = +(ltc + fee).toFixed(8);
+  const uri  = `litecoin:${addr}?amount=${ltc}&label=${encodeURIComponent('C4sino deposit')}`;
+
+  const embed = new EmbedBuilder()
+    .setTitle(`💠 LTC 入金見積り — ¥${jpy.toLocaleString()}`)
+    .setColor(0x345d9d)
+    .addFields(
+      { name: 'Address',        value: `\`${addr}\``, inline: false },
+      { name: 'Amount (LTC)',   value: `\`${ltc}\` LTC`, inline: true },
+      { name: 'Estimated fee',  value: `~\`${fee}\` LTC`, inline: true },
+      { name: 'Total send',     value: `~\`${total}\` LTC`, inline: true },
+      { name: L('Rate'),        value: `1 LTC ≈ ¥${rate.toLocaleString()}`, inline: false },
+      { name: 'Payment URI',    value: `\`\`\`\n${uri}\n\`\`\``, inline: false },
+    )
+    .setFooter({ text: 'ネットワーク手数料で差分が出ます。実際に着金した金額でチャージされます。' });
   await i.editReply({ embeds: [embed] });
 }
 
@@ -500,6 +552,11 @@ async function onModal(i: ModalSubmitInteraction) {
     const amt = parseInt(i.fields.getTextInputValue('amt'), 10);
     if (!Number.isFinite(amt)) return i.reply({ content: '不正な数値', flags: MessageFlags.Ephemeral });
     return doSpin(i, amt);
+  }
+  if (i.customId === 'dep:ltc:calc') {
+    assertNotBanned(i.user.id);
+    const jpy = parseInt(i.fields.getTextInputValue('jpy').replace(/[,\s¥]/g, ''), 10);
+    return replyLtcQuote(i, jpy);
   }
   if (i.customId === 'dep:paypay') {
     assertNotBanned(i.user.id);

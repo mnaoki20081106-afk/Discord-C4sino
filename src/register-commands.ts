@@ -22,7 +22,8 @@ const pay = new SlashCommandBuilder()
     .addChoices(
       { name: 'PayPay (送金リンク)', value: 'paypay' },
       { name: 'LTC (Litecoin)',       value: 'ltc' },
-    ));
+    ))
+  .addIntegerOption(o => o.setName('amount').setDescription('(LTCのみ) 入金希望額 JPY. 省略時は見積りなしでアドレスのみ').setRequired(false));
 
 const wallet = new SlashCommandBuilder()
   .setName('wallet')
