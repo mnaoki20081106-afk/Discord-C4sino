@@ -16,6 +16,7 @@ import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
 import { assertBetAffordable, invalidateLiquidityCache, maxAffordableBet } from './payments/liquidity.js';
+import { MIN_DEPOSIT_JPY } from './payments/limits.js';
 import { L } from './ui/leet.js';
 import { gameOverview, type GameKey } from './ui/overview.js';
 
@@ -69,8 +70,13 @@ async function onCommand(i: ChatInputCommandInteraction) {
 }
 
 async function cmdOverview(i: ChatInputCommandInteraction) {
-  const g = (i.options.getString('game') ?? 'all') as GameKey;
-  await i.reply({ embeds: [gameOverview(g)], flags: MessageFlags.Ephemeral });
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageChannels))
+    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
+  if (!i.channel || !('send' in i.channel))
+    return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
+  const g = i.options.getString('game', true) as GameKey;
+  await i.channel.send({ embeds: [gameOverview(g)] });
+  await i.reply({ content: `✅ ${g} 概要パネルを設置しました`, flags: MessageFlags.Ephemeral });
 }
 
 async function cmdPay(i: ChatInputCommandInteraction) {
@@ -261,9 +267,6 @@ async function onButton(i: ButtonInteraction) {
   if (ns === 'slot') return onSlotButton(i, kind, arg);
   if (ns === 'dep') return onDepositButton(i, kind, arg);
   if (ns === 'adm') return onAdminButton(i, kind);
-  if (ns === 'ov') {
-    return i.reply({ embeds: [gameOverview(kind as GameKey)], flags: MessageFlags.Ephemeral });
-  }
   if (ns === 'bal') {
     const bal = getBalance(i.user.id);
     return i.reply({ content: `💰 残高: **${bal.toLocaleString()} ${L('chips')}**`, flags: MessageFlags.Ephemeral });
@@ -509,6 +512,7 @@ async function replyLtcQuote(i: ModalSubmitInteraction | ButtonInteraction | Cha
   }
 
   if (!Number.isFinite(jpy) || jpy <= 0)       return i.editReply('❌ 金額が不正');
+  if (jpy < MIN_DEPOSIT_JPY.ltc)                return i.editReply(`❌ LTC の最低入金額は ¥${MIN_DEPOSIT_JPY.ltc.toLocaleString()} です`);
   if (jpy > 10_000_000)                         return i.editReply('❌ 金額が大きすぎます');
   if (!rate)                                    return i.editReply('⚠️ レート取得失敗。しばらく経って再度お試しください。');
 
@@ -546,6 +550,8 @@ async function processPaypayDeposit(discordId: string, linkInput: string, passco
   // ログイン不要の check で先に状態を見る
   const pre = await pp.linkCheck(code).catch(() => null);
   if (pre && pre.status !== 'PENDING') throw new Error(`リンク状態: ${pre.status}`);
+  if (pre && pre.amount < MIN_DEPOSIT_JPY.paypay)
+    throw new Error(`最低入金額は ¥${MIN_DEPOSIT_JPY.paypay.toLocaleString()} です (このリンクは ¥${pre.amount.toLocaleString()})`);
 
   const r = await wallets.withPaypay(w, t => pp.linkReceive(t, code, passcode));
   wallets.touchUsed(w.id);
@@ -646,6 +652,16 @@ async function ltcPoll() {
       const exists = db.prepare('SELECT 1 FROM deposits WHERE tx_ref=?').get(tx.txid);
       if (exists) continue;
       const jpy = Math.floor(tx.value_ltc * rate);
+      if (jpy < MIN_DEPOSIT_JPY.ltc) {
+        console.warn(`[ltc-poll] ${tx.txid} too small: ¥${jpy} < ¥${MIN_DEPOSIT_JPY.ltc}`);
+        // 最低額未満は無視 (ユーザーには DM で通知)
+        const user = await client.users.fetch(row.discord_id).catch(() => null);
+        await user?.send(`⚠️ LTC ${tx.value_ltc} (≈ ¥${jpy.toLocaleString()}) を検出しましたが、最低入金額 ¥${MIN_DEPOSIT_JPY.ltc.toLocaleString()} 未満のため処理されませんでした。`).catch(() => {});
+        db.prepare(`INSERT INTO deposits(discord_id, method, amount_jpy, amount_raw, tx_ref, status, confirmed_at)
+          VALUES (?, 'ltc', ?, ?, ?, 'rejected', strftime('%s','now'))`)
+          .run(row.discord_id, jpy, String(tx.value_ltc), tx.txid);
+        continue;
+      }
       try {
         db.prepare(`INSERT INTO deposits(discord_id, method, amount_jpy, amount_raw, tx_ref, status, confirmed_at)
           VALUES (?, 'ltc', ?, ?, ?, 'confirmed', strftime('%s','now'))`)

@@ -17,12 +17,14 @@ const balance = new SlashCommandBuilder()
 
 const overview = new SlashCommandBuilder()
   .setName('overview')
-  .setDescription('ゲーム概要・期待値 (RTP) を確認')
-  .addStringOption(o => o.setName('game').setDescription('ゲーム (省略で全体)').setRequired(false)
+  .setDescription('ユーザー向け説明パネルをこのチャンネルに設置 (管理者)')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels.toString())
+  .addStringOption(o => o.setName('game').setDescription('設置するパネル').setRequired(true)
     .addChoices(
-      { name: 'All (全ゲーム概要)', value: 'all' },
-      { name: 'Blackjack',          value: 'blackjack' },
-      { name: 'Slots',              value: 'slots' },
+      { name: 'All  (全ゲーム概要)',  value: 'all' },
+      { name: 'Blackjack',             value: 'blackjack' },
+      { name: 'Slots',                 value: 'slots' },
+      { name: 'Cashier (入金について)', value: 'cashier' },
     ));
 
 const pay = new SlashCommandBuilder()

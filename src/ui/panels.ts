@@ -19,10 +19,7 @@ export function blackjackPanel() {
     new ButtonBuilder().setCustomId('bj:bet:5000').setLabel(`${L('BET')} 5,000`).setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('bj:bet:custom').setLabel(L('CUSTOM')).setStyle(ButtonStyle.Success),
   );
-  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('ov:blackjack').setLabel('📒 概要 / RTP').setStyle(ButtonStyle.Secondary),
-  );
-  return { embeds: [embed], components: [row1, row2] };
+  return { embeds: [embed], components: [row1] };
 }
 
 export function slotsPanel() {
@@ -44,10 +41,7 @@ export function slotsPanel() {
     new ButtonBuilder().setCustomId('slot:spin:1000').setLabel(`${L('SPIN')} 1,000`).setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId('slot:spin:custom').setLabel(L('CUSTOM')).setStyle(ButtonStyle.Success),
   );
-  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('ov:slots').setLabel('📒 概要 / RTP').setStyle(ButtonStyle.Secondary),
-  );
-  return { embeds: [embed], components: [row, row2] };
+  return { embeds: [embed], components: [row] };
 }
 
 export function depositPanel() {
