@@ -655,10 +655,10 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
 
 const ROU_LABEL: Record<string, string> = {
   red: '🟥 Red', black: '⬛ Black', odd: 'Odd', even: 'Even',
-  low: '1–18', high: '19–36',
-  dozen1: '1st12', dozen2: '2nd12', dozen3: '3rd12',
-  column1: 'Col1', column2: 'Col2', column3: 'Col3',
-  number: '🎯 Straight-up',
+  low: '1–18 Low', high: '19–36 High',
+  dozen1: 'Dozen 1–12', dozen2: 'Dozen 13–24', dozen3: 'Dozen 25–36',
+  column1: 'Column 1', column2: 'Column 2', column3: 'Column 3',
+  number: 'Single Number',
 };
 
 async function onRouletteButton(i: ButtonInteraction, kind: string, arg: string) {

@@ -52,35 +52,38 @@ export function roulettePanel() {
     .setColor(0x0d5a3a)
     .addFields(
       { name: L('Pays'), value:
-        '🟥 Red / ⬛ Black / Odd / Even / 1–18 / 19–36 ... **×2**\n' +
-        '1st12 / 2nd12 / 3rd12 / Col1 / Col2 / Col3 ... **×3**\n' +
-        'Straight-up (単一数字) ... **×36**',
+        '🟥 Red / ⬛ Black / Odd / Even / 1–18 Low / 19–36 High ... **×2**\n' +
+        'Dozen 1–12 / 13–24 / 25–36 ... **×3**\n' +
+        'Single Number (0〜36) ... **×36**',
         inline: false },
       { name: L('Bet'), value: `10 〜 50,000 ${L('chips')}`, inline: true },
       { name: 'RTP',   value: '≈ 97.30%', inline: true },
     )
     .setFooter({ text: 'Discord C4sino · Roulette Table' });
 
+  // row1: 偶数配当系 (×2) 4 種
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId('rou:bet:red').setLabel('🟥 RED').setStyle(ButtonStyle.Danger),
     new ButtonBuilder().setCustomId('rou:bet:black').setLabel('⬛ BLACK').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('rou:bet:odd').setLabel('ODD').setStyle(ButtonStyle.Primary),
     new ButtonBuilder().setCustomId('rou:bet:even').setLabel('EVEN').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('rou:bet:odd').setLabel('ODD').setStyle(ButtonStyle.Primary),
   );
+  // row2: 上下半分 (×2) 2 種
   const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('rou:bet:low').setLabel('1–18').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('rou:bet:high').setLabel('19–36').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('rou:bet:dozen1').setLabel('1st12').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('rou:bet:dozen2').setLabel('2nd12').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('rou:bet:dozen3').setLabel('3rd12').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('rou:bet:low').setLabel('1–18 LOW').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('rou:bet:high').setLabel('19–36 HIGH').setStyle(ButtonStyle.Primary),
   );
+  // row3: Dozen (×3) 3 種
   const row3 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('rou:bet:column1').setLabel('Col1').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('rou:bet:column2').setLabel('Col2').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('rou:bet:column3').setLabel('Col3').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('rou:bet:number').setLabel('🎯 Straight (×36)').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('rou:bet:dozen1').setLabel('Dozen 1–12').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('rou:bet:dozen2').setLabel('Dozen 13–24').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('rou:bet:dozen3').setLabel('Dozen 25–36').setStyle(ButtonStyle.Secondary),
   );
-  return { embeds: [embed], components: [row1, row2, row3] };
+  // row4: Single Number (×36)
+  const row4 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('rou:bet:number').setLabel('🎯 Single Number ×36').setStyle(ButtonStyle.Success),
+  );
+  return { embeds: [embed], components: [row1, row2, row3, row4] };
 }
 
 export function baccaratPanel() {
