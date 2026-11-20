@@ -81,7 +81,7 @@ async function onButton(i: ButtonInteraction) {
   if (ns === 'dep') return onDepositButton(i, kind, arg);
   if (ns === 'bal') {
     const bal = getBalance(i.user.id);
-    return i.reply({ content: `💰 残高: **${bal.toLocaleString()} chips**`, flags: MessageFlags.Ephemeral });
+    return i.reply({ content: `💰 残高: **${bal.toLocaleString()} ch1ps**`, flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -90,9 +90,9 @@ async function onButton(i: ButtonInteraction) {
 async function onBJButton(i: ButtonInteraction, kind: string, arg: string) {
   if (kind === 'bet') {
     if (arg === 'custom') {
-      const modal = new ModalBuilder().setCustomId('bj:custombet').setTitle('Blackjack — Custom Bet')
+      const modal = new ModalBuilder().setCustomId('bj:custombet').setTitle('BL4CKJ4CK — Cust0m B3t')
         .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
-          new TextInputBuilder().setCustomId('amt').setLabel('BET (chips)').setStyle(TextInputStyle.Short).setRequired(true)
+          new TextInputBuilder().setCustomId('amt').setLabel('B3T (ch1ps)').setStyle(TextInputStyle.Short).setRequired(true)
         ));
       return i.showModal(modal);
     }
@@ -195,9 +195,9 @@ async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState, n
 async function onSlotButton(i: ButtonInteraction, kind: string, arg: string) {
   if (kind !== 'spin') return;
   if (arg === 'custom') {
-    const modal = new ModalBuilder().setCustomId('slot:custombet').setTitle('Slots — Custom Bet')
+    const modal = new ModalBuilder().setCustomId('slot:custombet').setTitle('5L0T5 — Cust0m B3t')
       .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder().setCustomId('amt').setLabel('BET (chips)').setStyle(TextInputStyle.Short).setRequired(true)
+        new TextInputBuilder().setCustomId('amt').setLabel('B3T (ch1ps)').setStyle(TextInputStyle.Short).setRequired(true)
       ));
     return i.showModal(modal);
   }
@@ -244,7 +244,7 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
       bet, balance: getBalance(i.user.id),
       payoutMult: spinning ? 0 : result.payoutMult,
       spinning,
-      label: !spinning && result.payoutMult >= 100 ? (result.payoutMult >= 1000 ? 'JACKPOT' : 'BIG WIN') : 'WIN',
+      label: !spinning && result.payoutMult >= 100 ? (result.payoutMult >= 1000 ? 'J4CKP0T' : 'B1G W1N') : 'W1N',
     });
     await i.editReply({ files: [new AttachmentBuilder(buf, { name: 's.png' })] });
   }
@@ -278,8 +278,8 @@ async function onDepositButton(i: ButtonInteraction, kind: string, arg: string) 
       .setTitle('LTC 入金')
       .setDescription('下記アドレスに LTC を送金してください。1承認で自動チャージされます。')
       .addFields(
-        { name: 'アドレス', value: `\`${addr}\`` },
-        ...(rate ? [{ name: '現在レート', value: `1 LTC ≈ ¥${rate.toLocaleString()}` }] : []),
+        { name: '4ddr3ss', value: `\`${addr}\`` },
+        ...(rate ? [{ name: 'R4t3', value: `1 LTC ≈ ¥${rate.toLocaleString()}` }] : []),
       )
       .setColor(0x345d9d);
     return i.editReply({ embeds: [embed] });
@@ -295,7 +295,7 @@ async function onDepositButton(i: ButtonInteraction, kind: string, arg: string) 
       const dep = approve(id);
       await i.update({ components: [], embeds: [EmbedBuilder.from(i.message.embeds[0]).setColor(0x22c55e).setTitle('✅ 承認済み')] });
       const user = await client.users.fetch(dep.discord_id).catch(() => null);
-      await user?.send(`✅ PayPay ¥${dep.amount_jpy.toLocaleString()} を承認。残高に加算しました。`).catch(() => {});
+      await user?.send(`✅ P4yP4y ¥${dep.amount_jpy.toLocaleString()} を承認。残高に加算しました。`).catch(() => {});
     } else {
       reject(id);
       await i.update({ components: [], embeds: [EmbedBuilder.from(i.message.embeds[0]).setColor(0xef4444).setTitle('❌ 却下')] });
