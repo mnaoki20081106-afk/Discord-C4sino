@@ -15,6 +15,7 @@ import { blackjackPanel, slotsPanel, depositPanel, bjActionsRow } from './ui/pan
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
+import { assertBetAffordable, invalidateLiquidityCache, maxAffordableBet } from './payments/liquidity.js';
 import { L } from './ui/leet.js';
 import { gameOverview, type GameKey } from './ui/overview.js';
 
@@ -196,12 +197,14 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
     return i.reply({ content: `✅ <@${u.id}> BAN解除`, flags: MessageFlags.Ephemeral });
   }
   if (sub === 'stats') {
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
     const users = (db.prepare('SELECT COUNT(*) c FROM users').get() as any).c;
     const chips = (db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get() as any).s;
     const bets  = (db.prepare("SELECT COALESCE(SUM(-delta),0) s FROM ledger WHERE reason LIKE 'bet:%'").get() as any).s;
     const wins  = (db.prepare("SELECT COALESCE(SUM(delta),0) s FROM ledger WHERE reason LIKE 'win:%'").get() as any).s;
     const deps  = (db.prepare("SELECT COALESCE(SUM(amount_jpy),0) s FROM deposits WHERE status='confirmed'").get() as any).s;
     const walletsCount = (db.prepare('SELECT COUNT(*) c FROM wallets WHERE enabled=1').get() as any).c;
+    const m = await maxAffordableBet();
     const embed = new EmbedBuilder().setTitle('📊 C4sino Stats').setColor(0xd4af37)
       .addFields(
         { name: 'ユーザー数', value: `${users}`, inline: true },
@@ -211,8 +214,16 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
         { name: '累計 WIN', value: `${wins.toLocaleString()}`, inline: true },
         { name: 'ハウスエッジ', value: `${(bets-wins).toLocaleString()}`, inline: true },
         { name: '入金合計 (JPY換算)', value: `¥${deps.toLocaleString()}`, inline: false },
+        { name: '🏦 ウォレット流動性',
+          value: `PayPay: ¥${m.liq.paypay.toLocaleString()}\nLTC: ¥${m.liq.ltc.toLocaleString()}\n` +
+                 `合計: ¥${m.liq.total.toLocaleString()}\n債務 (流通チップ): -¥${m.outstanding.toLocaleString()}\n` +
+                 `**実効流動性: ¥${m.effective.toLocaleString()}**`,
+          inline: false },
+        { name: '📐 許容 BET 上限',
+          value: `Blackjack: **${m.blackjack.toLocaleString()}**\nSlots: **${m.slots.toLocaleString()}**`,
+          inline: false },
       );
-    return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+    return i.editReply({ embeds: [embed] });
   }
   if (sub === 'tx') {
     const u = i.options.getUser('user', true);
@@ -319,6 +330,8 @@ async function startBJ(i: ButtonInteraction | ModalSubmitInteraction, bet: numbe
   ensureUser(i.user.id);
   if (bet < 10 || bet > 50000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
+  try { await assertBetAffordable('blackjack', bet); }
+  catch (e) { return i.reply({ content: `🏦 ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
   txCredit(i.user.id, -bet, 'bet:blackjack');
   const st = startHand(bet, newShoe());
   const entry = sessions.create(i.user.id, 'blackjack', st, bet);
@@ -393,6 +406,8 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
   ensureUser(i.user.id);
   if (bet < 10 || bet > 10000) return i.reply({ content: `${L('BET')} は 10 〜 10,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
+  try { await assertBetAffordable('slots', bet); }
+  catch (e) { return i.reply({ content: `🏦 ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
   txCredit(i.user.id, -bet, 'bet:slots');
 
   const result = spin();
@@ -539,6 +554,7 @@ async function processPaypayDeposit(discordId: string, linkInput: string, passco
     VALUES (?, 'paypay', ?, ?, ?, 'confirmed', strftime('%s','now'))`);
   stmt.run(discordId, r.amount, String(r.amount), code);
   txCredit(discordId, r.amount, 'deposit:paypay', code);
+  invalidateLiquidityCache();
   return { amount: r.amount, wallet: w.label };
 }
 
@@ -635,6 +651,7 @@ async function ltcPoll() {
           VALUES (?, 'ltc', ?, ?, ?, 'confirmed', strftime('%s','now'))`)
           .run(row.discord_id, jpy, String(tx.value_ltc), tx.txid);
         txCredit(row.discord_id, jpy, 'deposit:ltc', tx.txid);
+        invalidateLiquidityCache();
         const user = await client.users.fetch(row.discord_id).catch(() => null);
         await user?.send(`✅ LTC ${tx.value_ltc} (≈ ¥${jpy.toLocaleString()}) を受信。残高に加算しました。`).catch(() => {});
       } catch { /* dup */ }
@@ -645,14 +662,20 @@ setInterval(ltcPoll, 60_000);
 
 /* ────────────── PayPay keepalive ────────────── */
 
-async function paypayAlive() {
+async function paypayAliveAndRefresh() {
   if (!process.env.PAYPAY_SIDECAR_URL) return;
   const rows = wallets.listWallets('paypay').filter(w => w.enabled && w.access_token);
   for (const w of rows) {
-    try { await wallets.withPaypay(w, t => pp.alive(t)); }
-    catch (e) { console.warn(`[paypay-alive] #${w.id}:`, (e as Error).message); }
+    try {
+      await wallets.withPaypay(w, t => pp.alive(t));
+      const b = await wallets.withPaypay(w, t => pp.walletBalance(t));
+      wallets.touchUsed(w.id, b.usable_balance);
+    } catch (e) { console.warn(`[paypay-alive] #${w.id}:`, (e as Error).message); }
   }
+  invalidateLiquidityCache();
 }
-setInterval(paypayAlive, 5 * 60_000);
+setInterval(paypayAliveAndRefresh, 5 * 60_000);
+// 起動直後にも 1 回
+setTimeout(paypayAliveAndRefresh, 10_000);
 
 client.login(process.env.DISCORD_TOKEN);

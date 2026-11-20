@@ -22,6 +22,14 @@ export async function getOrCreateAddress(discordId: string): Promise<string> {
 
 export interface ConfirmedTx { txid: string; value_ltc: number; }
 
+export async function addressBalanceLtc(address: string): Promise<number> {
+  const token = process.env.LTC_API_TOKEN;
+  const res = await fetch(`${API}/addrs/${address}/balance${token?`?token=${token}`:''}`);
+  if (!res.ok) throw new Error(`balance ${res.status}`);
+  const j = await res.json() as { final_balance: number };
+  return j.final_balance / 1e8;
+}
+
 export async function checkDeposits(address: string): Promise<ConfirmedTx[]> {
   const token = process.env.LTC_API_TOKEN;
   const url = `${API}/addrs/${address}/full${token?`?token=${token}`:''}`;
