@@ -66,6 +66,37 @@ CREATE TABLE IF NOT EXISTS panels (
   game       TEXT NOT NULL,
   PRIMARY KEY (channel_id, game)
 );
+
+-- カジノ運営側の受取ウォレット (PayPay / LTC)
+CREATE TABLE IF NOT EXISTS wallets (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind          TEXT NOT NULL CHECK(kind IN ('paypay','ltc')),
+  label         TEXT NOT NULL,
+  enabled       INTEGER NOT NULL DEFAULT 1,
+  -- PayPay 用
+  phone         TEXT,
+  access_token  TEXT,
+  refresh_token TEXT,
+  device_uuid   TEXT,
+  external_user_id TEXT,
+  display_name  TEXT,
+  -- LTC 用
+  address       TEXT,
+  derivation    TEXT,
+  -- 共通
+  owner_id      TEXT NOT NULL,                -- 登録した管理者
+  created_at    INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  last_used_at  INTEGER,
+  balance_cached INTEGER                       -- 直近の PayPay 残高キャッシュ
+);
+CREATE INDEX IF NOT EXISTS idx_wallets_kind ON wallets(kind, enabled);
+
+-- ユーザー BAN
+CREATE TABLE IF NOT EXISTS user_bans (
+  discord_id TEXT PRIMARY KEY,
+  reason     TEXT,
+  banned_at  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
 `);
 
 export function ensureUser(discordId: string) {
@@ -84,3 +115,12 @@ export const txCredit = db.transaction((discordId: string, delta: number, reason
   if (upd.changes !== 1) throw new Error('insufficient funds or user missing');
   db.prepare('INSERT INTO ledger(discord_id, delta, reason, ref) VALUES (?,?,?,?)').run(discordId, delta, reason, ref ?? null);
 });
+
+export function isBanned(discordId: string): boolean {
+  const r = db.prepare('SELECT 1 FROM user_bans WHERE discord_id = ?').get(discordId);
+  return !!r;
+}
+
+export function assertNotBanned(discordId: string) {
+  if (isBanned(discordId)) throw new Error('あなたはこのカジノの利用を停止されています');
+}

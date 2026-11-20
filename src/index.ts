@@ -5,14 +5,15 @@ import {
   EmbedBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteraction,
   ButtonInteraction, ModalSubmitInteraction, MessageFlags,
 } from 'discord.js';
-import { db, getBalance, txCredit, ensureUser } from './db/schema.js';
+import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned } from './db/schema.js';
 import * as sessions from './games/session-store.js';
-import { startHand, availableActions, apply, newShoe, handTotal, isBlackjack, type BJState } from './games/blackjack.js';
+import { startHand, availableActions, apply, newShoe, isBlackjack, type BJState } from './games/blackjack.js';
 import { spin, reelStrip } from './games/slots.js';
 import { renderBlackjack } from './ui/render-table.js';
 import { renderSlots } from './ui/render-slots.js';
 import { blackjackPanel, slotsPanel, depositPanel, bjActionsRow } from './ui/panels.js';
-import { submitClaim, notifyAdmins, approve, reject } from './payments/paypay.js';
+import * as pp from './payments/paypay-client.js';
+import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
 import { L } from './ui/leet.js';
 
@@ -21,7 +22,6 @@ const client = new Client({
   partials: [Partials.Channel],
 });
 
-// 設定テーブル (admin通知チャンネル)
 db.exec(`CREATE TABLE IF NOT EXISTS guild_config (
   guild_id TEXT PRIMARY KEY,
   admin_channel_id TEXT
@@ -32,6 +32,9 @@ function getAdminChannel(guildId: string): string | null {
   return r?.admin_channel_id ?? null;
 }
 
+// PayPay ログイン進行状態 (discordUserId -> { sidecarSession, label, phone, guildId })
+const paypayLoginFlow = new Map<string, { sess: string; label: string; phone: string }>();
+
 client.once(Events.ClientReady, c => console.log(`[bot] online as ${c.user.tag}`));
 
 client.on(Events.InteractionCreate, async (i) => {
@@ -41,48 +44,218 @@ client.on(Events.InteractionCreate, async (i) => {
     else if (i.isModalSubmit()) await onModal(i);
   } catch (e) {
     console.error(e);
-    const msg = `❌ error: ${(e as Error).message}`;
+    const msg = `❌ ${(e as Error).message}`;
     if (i.isRepliable()) {
-      if (i.replied || i.deferred) await i.followUp({ content: msg, flags: MessageFlags.Ephemeral });
-      else await i.reply({ content: msg, flags: MessageFlags.Ephemeral });
+      if (i.replied || i.deferred) await i.followUp({ content: msg, flags: MessageFlags.Ephemeral }).catch(()=>{});
+      else await i.reply({ content: msg, flags: MessageFlags.Ephemeral }).catch(()=>{});
     }
   }
 });
 
+/* ────────────── COMMANDS ────────────── */
+
 async function onCommand(i: ChatInputCommandInteraction) {
-  if (i.commandName === 'setup') {
-    if (!i.memberPermissions?.has(PermissionFlagsBits.ManageChannels))
-      return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
-    const game = i.options.getString('game', true);
-    const payload = game === 'blackjack' ? blackjackPanel()
-                 : game === 'slots'     ? slotsPanel()
-                 : depositPanel();
-    if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
-    const msg = await i.channel.send(payload);
-    db.prepare('INSERT OR REPLACE INTO panels(guild_id,channel_id,message_id,game) VALUES (?,?,?,?)')
-      .run(i.guildId!, i.channelId, msg.id, game);
-    await i.reply({ content: `✅ ${game} パネルを設置`, flags: MessageFlags.Ephemeral });
-  } else if (i.commandName === 'balance') {
-    const bal = getBalance(i.user.id);
-    await i.reply({ content: `💰 残高: **${bal.toLocaleString()} ${L('chips')}**`, flags: MessageFlags.Ephemeral });
-  } else if (i.commandName === 'admin-channel') {
-    if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator))
-      return i.reply({ content: '管理者のみ', flags: MessageFlags.Ephemeral });
-    db.prepare(`INSERT INTO guild_config(guild_id, admin_channel_id) VALUES (?,?)
-      ON CONFLICT(guild_id) DO UPDATE SET admin_channel_id=excluded.admin_channel_id`)
-      .run(i.guildId!, i.channelId);
-    await i.reply({ content: '✅ 承認通知チャンネル登録', flags: MessageFlags.Ephemeral });
+  switch (i.commandName) {
+    case 'setup':    return cmdSetup(i);
+    case 'balance':  return cmdBalance(i);
+    case 'wallet':   return cmdWallet(i);
+    case 'admin':    return cmdAdmin(i);
   }
 }
+
+async function cmdSetup(i: ChatInputCommandInteraction) {
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageChannels))
+    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
+  const game = i.options.getString('game', true);
+  const payload = game === 'blackjack' ? blackjackPanel()
+               : game === 'slots'     ? slotsPanel()
+               : depositPanel();
+  if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
+  const msg = await i.channel.send(payload);
+  db.prepare('INSERT OR REPLACE INTO panels(guild_id,channel_id,message_id,game) VALUES (?,?,?,?)')
+    .run(i.guildId!, i.channelId, msg.id, game);
+  await i.reply({ content: `✅ ${game} パネルを設置`, flags: MessageFlags.Ephemeral });
+}
+
+async function cmdBalance(i: ChatInputCommandInteraction) {
+  const bal = getBalance(i.user.id);
+  await i.reply({ content: `💰 残高: **${bal.toLocaleString()} ${L('chips')}**`, flags: MessageFlags.Ephemeral });
+}
+
+/* ────────────── WALLET ADMIN ────────────── */
+
+async function cmdWallet(i: ChatInputCommandInteraction) {
+  const sub = i.options.getSubcommand();
+  if (sub === 'add-paypay') {
+    const label = i.options.getString('label', true);
+    const modal = new ModalBuilder().setCustomId(`wallet:paypay:start:${encodeURIComponent(label)}`).setTitle('PayPay ログイン')
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder().setCustomId('phone').setLabel('電話番号 (ハイフン可)').setStyle(TextInputStyle.Short).setRequired(true)),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder().setCustomId('password').setLabel('PayPay パスワード').setStyle(TextInputStyle.Short).setRequired(true)),
+      );
+    return i.showModal(modal);
+  }
+  if (sub === 'add-ltc') {
+    const label = i.options.getString('label', true);
+    const address = i.options.getString('address', true).trim();
+    if (!/^[A-HJ-NP-Za-km-z1-9]{25,100}$|^ltc1[0-9a-z]{25,100}$/.test(address))
+      return i.reply({ content: 'LTC アドレスの形式が不正です', flags: MessageFlags.Ephemeral });
+    const id = wallets.addLtcWallet(i.user.id, label, address);
+    return i.reply({ content: `✅ LTC ウォレット追加 (id=${id})`, flags: MessageFlags.Ephemeral });
+  }
+  if (sub === 'list') {
+    const rows = wallets.listWallets();
+    if (!rows.length) return i.reply({ content: 'ウォレット未登録', flags: MessageFlags.Ephemeral });
+    const embed = new EmbedBuilder().setTitle('🏦 Wallets').setColor(0xd4af37)
+      .setDescription(rows.map(w => {
+        const head = `**#${w.id}** [${w.kind}] ${w.enabled?'🟢':'⚪'} \`${w.label}\``;
+        const body = w.kind === 'paypay'
+          ? `  user: ${w.display_name ?? '-'} / phone: ${maskPhone(w.phone)} / 残: ${w.balance_cached ?? '?'}`
+          : `  addr: \`${w.address}\``;
+        return `${head}\n${body}`;
+      }).join('\n\n'));
+    return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
+  if (sub === 'enable' || sub === 'disable') {
+    const id = i.options.getInteger('id', true);
+    const ok = wallets.setEnabled(id, sub === 'enable');
+    return i.reply({ content: ok ? `✅ ${sub} id=${id}` : `見つかりません`, flags: MessageFlags.Ephemeral });
+  }
+  if (sub === 'remove') {
+    const id = i.options.getInteger('id', true);
+    const ok = wallets.removeWallet(id);
+    return i.reply({ content: ok ? `🗑️ 削除 id=${id}` : `見つかりません`, flags: MessageFlags.Ephemeral });
+  }
+  if (sub === 'balance') {
+    const id = i.options.getInteger('id', true);
+    const w = wallets.getWallet(id);
+    if (!w || w.kind !== 'paypay') return i.reply({ content: 'PayPay ウォレットが見つかりません', flags: MessageFlags.Ephemeral });
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    const bal = await wallets.withPaypay(w, t => pp.walletBalance(t));
+    wallets.touchUsed(id, bal.usable_balance);
+    return i.editReply(`💰 #${id} \`${w.label}\` — usable: **¥${bal.usable_balance.toLocaleString()}** / all: ¥${bal.all_balance.toLocaleString()} / pt: ${bal.points}`);
+  }
+}
+
+function maskPhone(p: string | null): string {
+  if (!p) return '-';
+  const d = p.replace(/\D/g, '');
+  if (d.length < 4) return '****';
+  return `****${d.slice(-4)}`;
+}
+
+/* ────────────── ADMIN ────────────── */
+
+async function cmdAdmin(i: ChatInputCommandInteraction) {
+  const sub = i.options.getSubcommand();
+  if (sub === 'balance') {
+    const u = i.options.getUser('user', true);
+    const delta = i.options.getInteger('delta', true);
+    const reason = i.options.getString('reason') ?? 'admin-adjust';
+    try {
+      ensureUser(u.id);
+      txCredit(u.id, delta, `admin:${reason}`, i.user.id);
+      const bal = getBalance(u.id);
+      return i.reply({ content: `✅ <@${u.id}> ${delta>=0?'+':''}${delta} → 残高 ${bal.toLocaleString()}`, flags: MessageFlags.Ephemeral });
+    } catch (e: any) {
+      return i.reply({ content: `❌ ${e.message}`, flags: MessageFlags.Ephemeral });
+    }
+  }
+  if (sub === 'ban') {
+    const u = i.options.getUser('user', true);
+    const reason = i.options.getString('reason') ?? '';
+    db.prepare('INSERT OR REPLACE INTO user_bans(discord_id, reason) VALUES (?,?)').run(u.id, reason);
+    return i.reply({ content: `🚫 <@${u.id}> BAN`, flags: MessageFlags.Ephemeral });
+  }
+  if (sub === 'unban') {
+    const u = i.options.getUser('user', true);
+    db.prepare('DELETE FROM user_bans WHERE discord_id=?').run(u.id);
+    return i.reply({ content: `✅ <@${u.id}> BAN解除`, flags: MessageFlags.Ephemeral });
+  }
+  if (sub === 'stats') {
+    const users = (db.prepare('SELECT COUNT(*) c FROM users').get() as any).c;
+    const chips = (db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get() as any).s;
+    const bets  = (db.prepare("SELECT COALESCE(SUM(-delta),0) s FROM ledger WHERE reason LIKE 'bet:%'").get() as any).s;
+    const wins  = (db.prepare("SELECT COALESCE(SUM(delta),0) s FROM ledger WHERE reason LIKE 'win:%'").get() as any).s;
+    const deps  = (db.prepare("SELECT COALESCE(SUM(amount_jpy),0) s FROM deposits WHERE status='confirmed'").get() as any).s;
+    const walletsCount = (db.prepare('SELECT COUNT(*) c FROM wallets WHERE enabled=1').get() as any).c;
+    const embed = new EmbedBuilder().setTitle('📊 C4sino Stats').setColor(0xd4af37)
+      .addFields(
+        { name: 'ユーザー数', value: `${users}`, inline: true },
+        { name: '流通チップ', value: `${chips.toLocaleString()}`, inline: true },
+        { name: '有効ウォレット', value: `${walletsCount}`, inline: true },
+        { name: '累計 BET', value: `${bets.toLocaleString()}`, inline: true },
+        { name: '累計 WIN', value: `${wins.toLocaleString()}`, inline: true },
+        { name: 'ハウスエッジ', value: `${(bets-wins).toLocaleString()}`, inline: true },
+        { name: '入金合計 (JPY換算)', value: `¥${deps.toLocaleString()}`, inline: false },
+      );
+    return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
+  if (sub === 'tx') {
+    const u = i.options.getUser('user', true);
+    const limit = i.options.getInteger('limit') ?? 10;
+    const rows = db.prepare('SELECT delta, reason, ref, created_at FROM ledger WHERE discord_id=? ORDER BY id DESC LIMIT ?')
+      .all(u.id, Math.max(1, Math.min(50, limit))) as Array<{delta:number;reason:string;ref:string|null;created_at:number}>;
+    if (!rows.length) return i.reply({ content: '取引なし', flags: MessageFlags.Ephemeral });
+    const bal = getBalance(u.id);
+    const list = rows.map(r => {
+      const d = new Date(r.created_at*1000).toISOString().replace('T',' ').slice(0,16);
+      return `\`${d}\` ${r.delta>=0?'+':''}${r.delta} — ${r.reason}${r.ref?` (${r.ref})`:''}`;
+    }).join('\n');
+    const embed = new EmbedBuilder().setTitle(`📜 <@${u.id}> のTX`).setDescription(list).setFooter({ text: `現残高 ${bal.toLocaleString()}` });
+    return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
+  if (sub === 'panel') {
+    if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
+    const embed = new EmbedBuilder().setTitle('🛠️  Admin Panel').setColor(0xd4af37)
+      .setDescription('カジノ運営の各種ショートカット');
+    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+      new ButtonBuilder().setCustomId('adm:stats').setLabel('統計').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('adm:wallets').setLabel('ウォレット一覧').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('adm:pending').setLabel('最近の入金').setStyle(ButtonStyle.Secondary),
+    );
+    await i.channel.send({ embeds: [embed], components: [row] });
+    return i.reply({ content: '✅ 管理パネル設置', flags: MessageFlags.Ephemeral });
+  }
+}
+
+/* ────────────── BUTTONS ────────────── */
 
 async function onButton(i: ButtonInteraction) {
   const [ns, kind, arg] = i.customId.split(':');
   if (ns === 'bj') return onBJButton(i, kind, arg);
   if (ns === 'slot') return onSlotButton(i, kind, arg);
   if (ns === 'dep') return onDepositButton(i, kind, arg);
+  if (ns === 'adm') return onAdminButton(i, kind);
   if (ns === 'bal') {
     const bal = getBalance(i.user.id);
     return i.reply({ content: `💰 残高: **${bal.toLocaleString()} ${L('chips')}**`, flags: MessageFlags.Ephemeral });
+  }
+}
+
+async function onAdminButton(i: ButtonInteraction, kind: string) {
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+    return i.reply({ content: '権限不足', flags: MessageFlags.Ephemeral });
+  if (kind === 'stats') {
+    // reuse command logic
+    const fake = { ...i, options: { getSubcommand: () => 'stats' } } as any;
+    return cmdAdmin(fake);
+  }
+  if (kind === 'wallets') {
+    const fake = { ...i, options: { getSubcommand: () => 'list' } } as any;
+    return cmdWallet(fake);
+  }
+  if (kind === 'pending') {
+    const rows = db.prepare(`SELECT id, discord_id, method, amount_jpy, status, created_at FROM deposits
+      ORDER BY id DESC LIMIT 15`).all() as Array<any>;
+    const txt = rows.map(r => {
+      const d = new Date(r.created_at*1000).toISOString().slice(0,16).replace('T',' ');
+      return `\`${d}\` #${r.id} [${r.method}] <@${r.discord_id}> ¥${r.amount_jpy.toLocaleString()} — **${r.status}**`;
+    }).join('\n') || '履歴なし';
+    const embed = new EmbedBuilder().setTitle('🧾 最近の入金').setDescription(txt).setColor(0xd4af37);
+    return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -90,6 +263,7 @@ async function onButton(i: ButtonInteraction) {
 
 async function onBJButton(i: ButtonInteraction, kind: string, arg: string) {
   if (kind === 'bet') {
+    assertNotBanned(i.user.id);
     if (arg === 'custom') {
       const modal = new ModalBuilder().setCustomId('bj:custombet').setTitle(`${L('BLACKJACK')} — ${L('Custom')} ${L('Bet')}`)
         .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
@@ -100,17 +274,13 @@ async function onBJButton(i: ButtonInteraction, kind: string, arg: string) {
     return startBJ(i, parseInt(arg, 10));
   }
   if (kind === 'act') {
-    // sid はメッセージのフッターまたは customId には収まらないので、sessionIdをembed descに埋めている
     const sid = extractSid(i.message.embeds[0]?.footer?.text);
     if (!sid) return i.reply({ content: 'セッションが見つかりません', flags: MessageFlags.Ephemeral });
     const entry = sessions.get(sid);
     if (!entry || entry.discordId !== i.user.id) return i.reply({ content: 'このセッションは他のユーザーのものです', flags: MessageFlags.Ephemeral });
     const st = entry.state as BJState;
     apply(st, arg as 'hit'|'stand'|'double'|'split');
-    // ダブル時に追加の掛け金を引く
-    // (bets は apply 内で2倍されているので差分だけ引く)
-    // 実装簡略のため: ここでは split/double は start時にチェック → double成立時は追加で bet 分を即減算
-    await updateBJMessage(i, entry.id, st, false);
+    await updateBJMessage(i, entry.id, st);
   }
 }
 
@@ -120,21 +290,16 @@ function extractSid(footer?: string | null): string | null {
   return m?.[1] ?? null;
 }
 
-async function startBJ(i: ButtonInteraction, bet: number) {
+async function startBJ(i: ButtonInteraction | ModalSubmitInteraction, bet: number) {
+  assertNotBanned(i.user.id);
   ensureUser(i.user.id);
-  if (bet < 10 || bet > 50000) return i.reply({ content: 'ベットは 10 〜 50,000', flags: MessageFlags.Ephemeral });
+  if (bet < 10 || bet > 50000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
   txCredit(i.user.id, -bet, 'bet:blackjack');
   const st = startHand(bet, newShoe());
   const entry = sessions.create(i.user.id, 'blackjack', st, bet);
 
-  // BJ 即勝利/ディーラーBJチェック
   if (isBlackjack(st.player[0]) || isBlackjack(st.dealer)) {
-    // 両方 BJ の可能性含めて settle
-    st.phase = 'dealer';
-    // dealer flow を使うために apply('stand')
-    (st as any).active = st.player.length;
-    // 直接 settle
     const dealerBJ = isBlackjack(st.dealer);
     const playerBJ = isBlackjack(st.player[0]);
     if (playerBJ && dealerBJ) { st.results = ['push']; st.payout = bet; }
@@ -143,7 +308,7 @@ async function startBJ(i: ButtonInteraction, bet: number) {
     st.phase = 'done';
   }
 
-  await sendBJEphemeral(i, entry.id, st);
+  await sendBJEphemeral(i as ButtonInteraction, entry.id, st);
 }
 
 async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
@@ -154,15 +319,11 @@ async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
     phase: st.phase, results: st.results, payout: st.payout,
   });
   const file = new AttachmentBuilder(buf, { name: 'bj.png' });
-  const embed = new EmbedBuilder()
-    .setImage('attachment://bj.png')
-    .setColor(0x0d5a3a)
-    .setFooter({ text: `sid=${sid}` });
-
+  const embed = new EmbedBuilder().setImage('attachment://bj.png').setColor(0x0d5a3a).setFooter({ text: `sid=${sid}` });
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   if (st.phase === 'player') rows.push(bjActionsRow(availableActions(st)));
 
-  await i.reply({ embeds: [embed], files: [file], components: rows, flags: MessageFlags.Ephemeral });
+  await (i as any).reply({ embeds: [embed], files: [file], components: rows, flags: MessageFlags.Ephemeral });
 
   if (st.phase === 'done') {
     if (st.payout) txCredit(i.user.id, st.payout, 'win:blackjack', sid);
@@ -170,7 +331,7 @@ async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
   }
 }
 
-async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState, newReply: boolean) {
+async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState) {
   const buf = await renderBlackjack({
     player: st.player, active: st.active, dealer: st.dealer,
     hideHole: st.phase === 'player',
@@ -178,13 +339,10 @@ async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState, n
     phase: st.phase, results: st.results, payout: st.payout,
   });
   const file = new AttachmentBuilder(buf, { name: 'bj.png' });
-  const embed = new EmbedBuilder()
-    .setImage('attachment://bj.png').setColor(0x0d5a3a).setFooter({ text: `sid=${sid}` });
+  const embed = new EmbedBuilder().setImage('attachment://bj.png').setColor(0x0d5a3a).setFooter({ text: `sid=${sid}` });
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   if (st.phase === 'player') rows.push(bjActionsRow(availableActions(st)));
-
   await i.update({ embeds: [embed], files: [file], components: rows, attachments: [] });
-
   if (st.phase === 'done') {
     if (st.payout) txCredit(i.user.id, st.payout, 'win:blackjack', sid);
     sessions.drop(sid);
@@ -195,6 +353,7 @@ async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState, n
 
 async function onSlotButton(i: ButtonInteraction, kind: string, arg: string) {
   if (kind !== 'spin') return;
+  assertNotBanned(i.user.id);
   if (arg === 'custom') {
     const modal = new ModalBuilder().setCustomId('slot:custombet').setTitle(`${L('SLOTS')} — ${L('Custom')} ${L('Bet')}`)
       .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
@@ -206,8 +365,9 @@ async function onSlotButton(i: ButtonInteraction, kind: string, arg: string) {
 }
 
 async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number) {
+  assertNotBanned(i.user.id);
   ensureUser(i.user.id);
-  if (bet < 10 || bet > 10000) return i.reply({ content: 'ベットは 10 〜 10,000', flags: MessageFlags.Ephemeral });
+  if (bet < 10 || bet > 10000) return i.reply({ content: `${L('BET')} は 10 〜 10,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
   txCredit(i.user.id, -bet, 'bet:slots');
 
@@ -216,19 +376,14 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
   const stripB = reelStrip(result.reels[1], 10);
   const stripC = reelStrip(result.reels[2], 12);
 
-  // 最初のスピン画面
   const first = await renderSlots({
     reels: [stripA[0], stripB[0], stripC[0]],
     above: [stripA[1] ?? stripA[0], stripB[1] ?? stripB[0], stripC[1] ?? stripC[0]],
     below: [stripA[2] ?? stripA[0], stripB[2] ?? stripB[0], stripC[2] ?? stripC[0]],
     bet, balance: getBalance(i.user.id), payoutMult: 0, spinning: true,
   });
-  const msg = await i.reply({
-    files: [new AttachmentBuilder(first, { name: 's.png' })],
-    flags: MessageFlags.Ephemeral, fetchReply: true,
-  });
+  await i.reply({ files: [new AttachmentBuilder(first, { name: 's.png' })], flags: MessageFlags.Ephemeral });
 
-  // アニメ (3フレーム) — 各リール停止タイミングをずらす
   const frames: [number, number, number][] = [
     [3, 5, 7],
     [stripA.length - 1, 7, 9],
@@ -256,18 +411,17 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
   }
 }
 
-/* ────────────── CASHIER ────────────── */
+/* ────────────── CASHIER (ユーザー入金) ────────────── */
 
-async function onDepositButton(i: ButtonInteraction, kind: string, arg: string) {
+async function onDepositButton(i: ButtonInteraction, kind: string, _arg: string) {
+  assertNotBanned(i.user.id);
   if (kind === 'paypay') {
-    const modal = new ModalBuilder().setCustomId('dep:paypay').setTitle('PayPay 送金リンク提出')
+    const modal = new ModalBuilder().setCustomId('dep:paypay').setTitle('PayPay 送金リンク入金')
       .addComponents(
         new ActionRowBuilder<TextInputBuilder>().addComponents(
-          new TextInputBuilder().setCustomId('amt').setLabel('送金額 (JPY)').setStyle(TextInputStyle.Short).setRequired(true)),
+          new TextInputBuilder().setCustomId('url').setLabel('送金リンク URL または ID').setStyle(TextInputStyle.Short).setRequired(true)),
         new ActionRowBuilder<TextInputBuilder>().addComponents(
-          new TextInputBuilder().setCustomId('url').setLabel('送金リンク URL').setStyle(TextInputStyle.Short).setRequired(true)),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(
-          new TextInputBuilder().setCustomId('pin').setLabel('パスコード (任意)').setStyle(TextInputStyle.Short).setRequired(false)),
+          new TextInputBuilder().setCustomId('pin').setLabel('パスコード (設定していれば)').setStyle(TextInputStyle.Short).setRequired(false)),
       );
     return i.showModal(modal);
   }
@@ -280,35 +434,45 @@ async function onDepositButton(i: ButtonInteraction, kind: string, arg: string) 
       .setDescription('下記アドレスに LTC を送金してください。1承認で自動チャージされます。')
       .addFields(
         { name: 'Address', value: `\`${addr}\`` },
-        ...(rate ? [{ name: 'R4t3', value: `1 LTC ≈ ¥${rate.toLocaleString()}` }] : []),
+        ...(rate ? [{ name: L('Rate'), value: `1 LTC ≈ ¥${rate.toLocaleString()}` }] : []),
       )
       .setColor(0x345d9d);
     return i.editReply({ embeds: [embed] });
   }
-  if (kind === 'approve' || kind === 'reject') {
-    const adminCh = getAdminChannel(i.guildId!);
-    if (!adminCh || adminCh !== i.channelId)
-      return i.reply({ content: '承認は管理チャンネルで', flags: MessageFlags.Ephemeral });
-    if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
-      return i.reply({ content: '権限不足', flags: MessageFlags.Ephemeral });
-    const id = parseInt(arg, 10);
-    if (kind === 'approve') {
-      const dep = approve(id);
-      await i.update({ components: [], embeds: [EmbedBuilder.from(i.message.embeds[0]).setColor(0x22c55e).setTitle('✅ 承認済み')] });
-      const user = await client.users.fetch(dep.discord_id).catch(() => null);
-      await user?.send(`✅ PayPay ¥${dep.amount_jpy.toLocaleString()} を承認。残高に加算しました。`).catch(() => {});
-    } else {
-      reject(id);
-      await i.update({ components: [], embeds: [EmbedBuilder.from(i.message.embeds[0]).setColor(0xef4444).setTitle('❌ 却下')] });
-    }
-  }
 }
+
+async function processPaypayDeposit(discordId: string, linkInput: string, passcode: string | undefined): Promise<{ amount: number; wallet: string }> {
+  const code = pp.extractLinkId(linkInput);
+  if (!code) throw new Error('PayPay 送金リンクを認識できませんでした');
+
+  const w = wallets.pickPaypayWallet();
+  if (!w) throw new Error('有効な PayPay 受取ウォレットが登録されていません。管理者に連絡してください。');
+
+  // 重複受領ガード
+  const dup = db.prepare('SELECT 1 FROM deposits WHERE tx_ref=?').get(code);
+  if (dup) throw new Error('この送金リンクは既に処理済みです');
+
+  // ログイン不要の check で先に状態を見る
+  const pre = await pp.linkCheck(code).catch(() => null);
+  if (pre && pre.status !== 'PENDING') throw new Error(`リンク状態: ${pre.status}`);
+
+  const r = await wallets.withPaypay(w, t => pp.linkReceive(t, code, passcode));
+  wallets.touchUsed(w.id);
+
+  const stmt = db.prepare(`INSERT INTO deposits(discord_id, method, amount_jpy, amount_raw, tx_ref, status, confirmed_at)
+    VALUES (?, 'paypay', ?, ?, ?, 'confirmed', strftime('%s','now'))`);
+  stmt.run(discordId, r.amount, String(r.amount), code);
+  txCredit(discordId, r.amount, 'deposit:paypay', code);
+  return { amount: r.amount, wallet: w.label };
+}
+
+/* ────────────── MODAL ────────────── */
 
 async function onModal(i: ModalSubmitInteraction) {
   if (i.customId === 'bj:custombet') {
     const amt = parseInt(i.fields.getTextInputValue('amt'), 10);
     if (!Number.isFinite(amt)) return i.reply({ content: '不正な数値', flags: MessageFlags.Ephemeral });
-    return startBJ(i as unknown as ButtonInteraction, amt);
+    return startBJ(i, amt);
   }
   if (i.customId === 'slot:custombet') {
     const amt = parseInt(i.fields.getTextInputValue('amt'), 10);
@@ -316,17 +480,60 @@ async function onModal(i: ModalSubmitInteraction) {
     return doSpin(i, amt);
   }
   if (i.customId === 'dep:paypay') {
-    const amt = parseInt(i.fields.getTextInputValue('amt'), 10);
-    const url = i.fields.getTextInputValue('url').trim();
+    assertNotBanned(i.user.id);
+    const url = i.fields.getTextInputValue('url');
     const pin = i.fields.getTextInputValue('pin').trim() || undefined;
-    if (!Number.isFinite(amt) || amt <= 0) return i.reply({ content: '金額が不正', flags: MessageFlags.Ephemeral });
-    if (!/^https:\/\/(pay\.)?paypay\.ne\.jp\//.test(url)) return i.reply({ content: 'PayPay 送金リンクではありません', flags: MessageFlags.Ephemeral });
-    const depId = submitClaim({ discordId: i.user.id, amountJpy: amt, linkUrl: url, passcode: pin });
-    const adminCh = getAdminChannel(i.guildId!);
-    if (adminCh) await notifyAdmins(client, adminCh, depId, { discordId: i.user.id, amountJpy: amt, linkUrl: url, passcode: pin });
-    await i.reply({ content: `✅ 承認待ち (#${depId}) — 管理者の確認をお待ちください`, flags: MessageFlags.Ephemeral });
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const r = await processPaypayDeposit(i.user.id, url, pin);
+      await i.editReply(`✅ PayPay ¥${r.amount.toLocaleString()} を受領（wallet: \`${r.wallet}\`）。残高に加算しました。`);
+    } catch (e: any) {
+      await i.editReply(`❌ ${e.message}`);
+    }
+  }
+  if (i.customId.startsWith('wallet:paypay:start:')) {
+    if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+      return i.reply({ content: '権限不足', flags: MessageFlags.Ephemeral });
+    const label = decodeURIComponent(i.customId.split(':')[3]);
+    const phone = i.fields.getTextInputValue('phone');
+    const password = i.fields.getTextInputValue('password');
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const r = await pp.loginStart(phone, password);
+      paypayLoginFlow.set(i.user.id, { sess: r.session, label, phone });
+      const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId('wallet:paypay:url').setLabel('SMS の URL を入力').setStyle(ButtonStyle.Primary)
+      );
+      await i.editReply({ content: `📱 SMS を送信しました。届いた URL (またはIDのみ) を次で入力してください。`, components: [row] });
+    } catch (e: any) {
+      await i.editReply(`❌ ${e.message}`);
+    }
+  }
+  if (i.customId === 'wallet:paypay:finish') {
+    const url = i.fields.getTextInputValue('url').trim();
+    const flow = paypayLoginFlow.get(i.user.id);
+    if (!flow) return i.reply({ content: 'ログインフローが見つかりません。最初からやり直してください。', flags: MessageFlags.Ephemeral });
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const tokens = await pp.loginFinish(flow.sess, url);
+      const id = wallets.addPaypayWallet(i.user.id, flow.label, flow.phone, tokens);
+      paypayLoginFlow.delete(i.user.id);
+      await i.editReply(`✅ PayPay ウォレット追加 (#${id}) — ${tokens.name ?? 'account'} として登録`);
+    } catch (e: any) {
+      await i.editReply(`❌ ${e.message}`);
+    }
   }
 }
+
+// PayPay URL 入力ボタン → モーダル
+client.on(Events.InteractionCreate, async (i) => {
+  if (!i.isButton() || i.customId !== 'wallet:paypay:url') return;
+  const modal = new ModalBuilder().setCustomId('wallet:paypay:finish').setTitle('PayPay SMS URL 入力')
+    .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId('url').setLabel('SMS 内の URL または ID').setStyle(TextInputStyle.Short).setRequired(true)
+    ));
+  await i.showModal(modal);
+});
 
 /* ────────────── LTC 入金ポーリング ────────────── */
 
@@ -341,10 +548,10 @@ async function ltcPoll() {
       const exists = db.prepare('SELECT 1 FROM deposits WHERE tx_ref=?').get(tx.txid);
       if (exists) continue;
       const jpy = Math.floor(tx.value_ltc * rate);
-      const stmt = db.prepare(`INSERT INTO deposits(discord_id, method, amount_jpy, amount_raw, tx_ref, status, confirmed_at)
-        VALUES (?, 'ltc', ?, ?, ?, 'confirmed', strftime('%s','now'))`);
       try {
-        stmt.run(row.discord_id, jpy, String(tx.value_ltc), tx.txid);
+        db.prepare(`INSERT INTO deposits(discord_id, method, amount_jpy, amount_raw, tx_ref, status, confirmed_at)
+          VALUES (?, 'ltc', ?, ?, ?, 'confirmed', strftime('%s','now'))`)
+          .run(row.discord_id, jpy, String(tx.value_ltc), tx.txid);
         txCredit(row.discord_id, jpy, 'deposit:ltc', tx.txid);
         const user = await client.users.fetch(row.discord_id).catch(() => null);
         await user?.send(`✅ LTC ${tx.value_ltc} (≈ ¥${jpy.toLocaleString()}) を受信。残高に加算しました。`).catch(() => {});
@@ -352,7 +559,18 @@ async function ltcPoll() {
     }
   }
 }
-
 setInterval(ltcPoll, 60_000);
+
+/* ────────────── PayPay keepalive ────────────── */
+
+async function paypayAlive() {
+  if (!process.env.PAYPAY_SIDECAR_URL) return;
+  const rows = wallets.listWallets('paypay').filter(w => w.enabled && w.access_token);
+  for (const w of rows) {
+    try { await wallets.withPaypay(w, t => pp.alive(t)); }
+    catch (e) { console.warn(`[paypay-alive] #${w.id}:`, (e as Error).message); }
+  }
+}
+setInterval(paypayAlive, 5 * 60_000);
 
 client.login(process.env.DISCORD_TOKEN);
