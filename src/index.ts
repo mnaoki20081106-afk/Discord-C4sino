@@ -19,7 +19,7 @@ import { renderRoulette } from './ui/render-roulette.js';
 import { renderBaccarat } from './ui/render-baccarat.js';
 import { renderVideoPoker } from './ui/render-videopoker.js';
 import { renderCraps } from './ui/render-craps.js';
-import { blackjackPanel, slotsPanel, roulettePanel, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow } from './ui/panels.js';
+import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow } from './ui/panels.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
@@ -662,10 +662,23 @@ const ROU_LABEL: Record<string, string> = {
 };
 
 async function onRouletteButton(i: ButtonInteraction, kind: string, arg: string) {
-  if (kind !== 'bet') return;
   assertNotBanned(i.user.id);
-  if (arg === 'number') {
-    const modal = new ModalBuilder().setCustomId('rou:num').setTitle(`${L('ROULETTE')} — Straight-up`)
+  if (kind === 'start') {
+    // パネル押下 → ベット種類選択画面を ephemeral で表示
+    const embed = new EmbedBuilder()
+      .setTitle(`🎡 ${L('ROULETTE')} — ベット選択`)
+      .setDescription('どの掛け方にするか選んでください。')
+      .setColor(0x0d5a3a);
+    return i.reply({ embeds: [embed], components: [rouletteBetSelectRow()], flags: MessageFlags.Ephemeral });
+  }
+  // 後方互換: 旧ボタン(rou:bet:...) が残っているパネルからの呼び出し
+  if (kind !== 'bet') return;
+  return openRouletteAmountModal(i, arg);
+}
+
+async function openRouletteAmountModal(i: ButtonInteraction | StringSelectMenuInteraction, kind: string) {
+  if (kind === 'number') {
+    const modal = new ModalBuilder().setCustomId('rou:num').setTitle(`${L('ROULETTE')} — Single Number`)
       .addComponents(
         new ActionRowBuilder<TextInputBuilder>().addComponents(
           new TextInputBuilder().setCustomId('num').setLabel('数字 (0〜36)').setStyle(TextInputStyle.Short).setRequired(true)),
@@ -674,7 +687,7 @@ async function onRouletteButton(i: ButtonInteraction, kind: string, arg: string)
       );
     return i.showModal(modal);
   }
-  const modal = new ModalBuilder().setCustomId(`rou:amt:${arg}`).setTitle(`${L('ROULETTE')} — ${ROU_LABEL[arg] ?? arg}`)
+  const modal = new ModalBuilder().setCustomId(`rou:amt:${kind}`).setTitle(`${L('ROULETTE')} — ${ROU_LABEL[kind] ?? kind}`)
     .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)
     ));
@@ -1125,6 +1138,11 @@ async function onSelect(i: StringSelectMenuInteraction) {
     const choice = i.values[0];
     if (choice === 'paypay') return openPaypayWithdrawModal(i);
     if (choice === 'ltc')    return openLtcWithdrawModal(i);
+  }
+  if (i.customId === 'rou:select') {
+    assertNotBanned(i.user.id);
+    const kind = i.values[0];
+    return openRouletteAmountModal(i, kind);
   }
   if (i.customId === 'cr:add') {
     assertNotBanned(i.user.id);

@@ -60,30 +60,30 @@ export function roulettePanel() {
       { name: 'RTP',   value: '≈ 97.30%', inline: true },
     )
     .setFooter({ text: 'Discord C4sino · Roulette Table' });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('rou:start').setLabel('🎡 PLAY').setStyle(ButtonStyle.Success),
+  );
+  return { embeds: [embed], components: [row] };
+}
 
-  // row1: 偶数配当系 (×2) 4 種
-  const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('rou:bet:red').setLabel('🟥 RED').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId('rou:bet:black').setLabel('⬛ BLACK').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('rou:bet:even').setLabel('EVEN').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('rou:bet:odd').setLabel('ODD').setStyle(ButtonStyle.Primary),
-  );
-  // row2: 上下半分 (×2) 2 種
-  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('rou:bet:low').setLabel('1–18 LOW').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('rou:bet:high').setLabel('19–36 HIGH').setStyle(ButtonStyle.Primary),
-  );
-  // row3: Dozen (×3) 3 種
-  const row3 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('rou:bet:dozen1').setLabel('Dozen 1–12').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('rou:bet:dozen2').setLabel('Dozen 13–24').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('rou:bet:dozen3').setLabel('Dozen 25–36').setStyle(ButtonStyle.Secondary),
-  );
-  // row4: Single Number (×36)
-  const row4 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('rou:bet:number').setLabel('🎯 Single Number ×36').setStyle(ButtonStyle.Success),
-  );
-  return { embeds: [embed], components: [row1, row2, row3, row4] };
+/** パネル押下後に出すベット種類の SelectMenu (ephemeral) */
+export function rouletteBetSelectRow() {
+  const sel = new StringSelectMenuBuilder()
+    .setCustomId('rou:select')
+    .setPlaceholder('🔽 ベットタイプを選択…')
+    .addOptions(
+      new StringSelectMenuOptionBuilder().setValue('red').setLabel('🟥 Red (×2)').setDescription('赤の数字 — 18/37'),
+      new StringSelectMenuOptionBuilder().setValue('black').setLabel('⬛ Black (×2)').setDescription('黒の数字 — 18/37'),
+      new StringSelectMenuOptionBuilder().setValue('even').setLabel('Even (×2)').setDescription('偶数 (0 除く) — 18/37'),
+      new StringSelectMenuOptionBuilder().setValue('odd').setLabel('Odd (×2)').setDescription('奇数 — 18/37'),
+      new StringSelectMenuOptionBuilder().setValue('low').setLabel('1–18 Low (×2)').setDescription('下半分 — 18/37'),
+      new StringSelectMenuOptionBuilder().setValue('high').setLabel('19–36 High (×2)').setDescription('上半分 — 18/37'),
+      new StringSelectMenuOptionBuilder().setValue('dozen1').setLabel('Dozen 1–12 (×3)').setDescription('第 1 ダース — 12/37'),
+      new StringSelectMenuOptionBuilder().setValue('dozen2').setLabel('Dozen 13–24 (×3)').setDescription('第 2 ダース — 12/37'),
+      new StringSelectMenuOptionBuilder().setValue('dozen3').setLabel('Dozen 25–36 (×3)').setDescription('第 3 ダース — 12/37'),
+      new StringSelectMenuOptionBuilder().setValue('number').setLabel('🎯 Single Number (×36)').setDescription('単一数字 0〜36 — 1/37'),
+    );
+  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(sel);
 }
 
 export function baccaratPanel() {
