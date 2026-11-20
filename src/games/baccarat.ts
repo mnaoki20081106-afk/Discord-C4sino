@@ -75,6 +75,19 @@ function decide(player: Card[], banker: Card[], pt: number, bt: number): Baccara
   return { player, banker, playerTotal: pt, bankerTotal: bt, winner };
 }
 
+export function dealBaccaratWithCap(side: Side, bet: number, payCap: number): BaccaratResult {
+  const MAX = 64;
+  for (let i = 0; i < MAX; i++) {
+    const r = dealBaccarat();
+    const mult = payoutMult(side, r.winner);
+    if (bet * mult <= payCap) return r;
+  }
+  // ハズレ結果を強制: side 以外が勝つシュミをもう一度回し続ける
+  let r: BaccaratResult;
+  do { r = dealBaccarat(); } while (payoutMult(side, r.winner) !== 0);
+  return r;
+}
+
 /** 掛けに対する gross payout 倍率 (bet 含む)。負けは 0。 */
 export function payoutMult(side: Side, winner: Side): number {
   if (side === winner) {

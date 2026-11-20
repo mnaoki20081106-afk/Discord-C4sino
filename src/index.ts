@@ -8,11 +8,11 @@ import {
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned } from './db/schema.js';
 import * as sessions from './games/session-store.js';
 import { startHand, availableActions, apply, newShoe, isBlackjack, type BJState } from './games/blackjack.js';
-import { spin, reelStrip } from './games/slots.js';
-import { spinRoulette, payoutMult as rouPayout, WHEEL, type BetKind as RouKind } from './games/roulette.js';
-import { dealBaccarat, payoutMult as bacPayout, type Side as BacSide } from './games/baccarat.js';
-import { startVP, drawVP, payoutFor, type VPHand } from './games/videopoker.js';
-import { newCraps, addBet, roll as crapsRoll, MULT as CRAPS_MULT, openExposure, type CrapsBetKind, type CrapsState, type CrapsBet } from './games/craps.js';
+import { spin, spinWithCap, reelStrip } from './games/slots.js';
+import { spinRoulette, spinRouletteWithCap, payoutMult as rouPayout, WHEEL, type BetKind as RouKind } from './games/roulette.js';
+import { dealBaccarat, dealBaccaratWithCap, payoutMult as bacPayout, type Side as BacSide } from './games/baccarat.js';
+import { startVP, drawVP, drawVPWithCap, payoutFor, type VPHand } from './games/videopoker.js';
+import { newCraps, addBet, roll as crapsRoll, openExposure, type CrapsBetKind, type CrapsState, type CrapsBet } from './games/craps.js';
 import { renderBlackjack } from './ui/render-table.js';
 import { renderSlots } from './ui/render-slots.js';
 import { renderRoulette } from './ui/render-roulette.js';
@@ -23,7 +23,7 @@ import { blackjackPanel, slotsPanel, roulettePanel, baccaratPanel, videopokerPan
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
-import { assertBetAffordable, assertCrapsBetAffordable, setCrapsExposure, clearCrapsExposure, invalidateLiquidityCache, maxAffordableBet } from './payments/liquidity.js';
+import { housePayoutCap, setCrapsExposure, clearCrapsExposure, invalidateLiquidityCache, maxAffordableBet } from './payments/liquidity.js';
 import { MIN_DEPOSIT_JPY } from './payments/limits.js';
 import { L } from './ui/leet.js';
 import { gameOverview, type GameKey } from './ui/overview.js';
@@ -363,7 +363,8 @@ async function onBJButton(i: ButtonInteraction, kind: string, arg: string) {
     const entry = sessions.get(sid);
     if (!entry || entry.discordId !== i.user.id) return i.reply({ content: 'このセッションは他のユーザーのものです', flags: MessageFlags.Ephemeral });
     const st = entry.state as BJState;
-    apply(st, arg as 'hit'|'stand'|'double'|'split');
+    const cap = await housePayoutCap();
+    apply(st, arg as 'hit'|'stand'|'double'|'split', cap);
     await updateBJMessage(i, entry.id, st);
   }
 }
@@ -379,8 +380,6 @@ async function startBJ(i: ButtonInteraction | ModalSubmitInteraction, bet: numbe
   ensureUser(i.user.id);
   if (bet < 10 || bet > 50000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
-  try { await assertBetAffordable('blackjack', bet); }
-  catch (e) { return i.reply({ content: `⚠️ ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
   txCredit(i.user.id, -bet, 'bet:blackjack');
   const st = startHand(bet, newShoe());
   const entry = sessions.create(i.user.id, 'blackjack', st, bet);
@@ -477,11 +476,9 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
   ensureUser(i.user.id);
   if (bet < 10 || bet > 10000) return i.reply({ content: `${L('BET')} は 10 〜 10,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
-  try { await assertBetAffordable('slots', bet); }
-  catch (e) { return i.reply({ content: `⚠️ ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
   txCredit(i.user.id, -bet, 'bet:slots');
 
-  const result = spin();
+  const result = spinWithCap(bet, await housePayoutCap());
   const stripA = reelStrip(result.reels[0], 8);
   const stripB = reelStrip(result.reels[1], 10);
   const stripC = reelStrip(result.reels[2], 12);
@@ -562,11 +559,9 @@ async function doRouletteSpin(
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
   if (kind === 'number' && (number === undefined || number < 0 || number > 36))
     return i.reply({ content: '数字は 0 〜 36 です', flags: MessageFlags.Ephemeral });
-  try { await assertBetAffordable('roulette', bet); }
-  catch (e) { return i.reply({ content: `⚠️ ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
   txCredit(i.user.id, -bet, 'bet:roulette');
 
-  const result = spinRoulette();
+  const result = spinRouletteWithCap({ kind, amount: bet, number }, await housePayoutCap());
   const mult   = rouPayout({ kind, amount: bet, number }, result);
   const label  = kind === 'number' ? `${ROU_LABEL.number} ${number}` : (ROU_LABEL[kind] ?? kind);
 
@@ -696,12 +691,6 @@ async function placeCrapsBet(i: ModalSubmitInteraction, sid: string, kind: Craps
   if (getBalance(i.user.id) < amount)
     return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
 
-  // 流動性ガード: 既存露出 + 新ベットの max gross が実効流動性を超えないか
-  const existing = openExposure(st);
-  const newMax = amount * CRAPS_MULT[kind];
-  try { await assertCrapsBetAffordable(sid, existing, newMax); }
-  catch (e) { return i.reply({ content: `⚠️ ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
-
   txCredit(i.user.id, -amount, `bet:craps:${kind}`, sid);
   addBet(st, kind, amount);
   setCrapsExposure(sid, openExposure(st));
@@ -716,7 +705,8 @@ async function placeCrapsBet(i: ModalSubmitInteraction, sid: string, kind: Craps
 }
 
 async function doCrapsRoll(i: ButtonInteraction, sid: string, st: CrapsState) {
-  const report = crapsRoll(st);
+  const cap = await housePayoutCap(sid);
+  const report = crapsRoll(st, cap);
   st.lastRoll = [report.d1, report.d2];
   let totalPayout = 0;
   const newBets: CrapsBet[] = [];
@@ -783,11 +773,9 @@ async function doBaccarat(i: ModalSubmitInteraction, side: BacSide, bet: number)
   ensureUser(i.user.id);
   if (bet < 10 || bet > 50_000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
-  try { await assertBetAffordable('baccarat', bet); }
-  catch (e) { return i.reply({ content: `⚠️ ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
   txCredit(i.user.id, -bet, 'bet:baccarat');
 
-  const r = dealBaccarat();
+  const r = dealBaccaratWithCap(side, bet, await housePayoutCap());
   const mult = bacPayout(side, r.winner);
 
   const buf = await renderBaccarat({
@@ -830,7 +818,7 @@ async function onVpButton(i: ButtonInteraction, kind: string, arg: string) {
       return updateVpMessage(i, entry.id, entry.bet, st);
     }
     if (kind === 'draw') {
-      if (st.phase === 'deal') drawVP(st);
+      if (st.phase === 'deal') drawVPWithCap(st, entry.bet, await housePayoutCap());
       await updateVpMessage(i, entry.id, entry.bet, st);
       if (st.phase === 'drawn' && st.rank) {
         const mult = payoutFor(st.rank);
@@ -849,8 +837,6 @@ async function startVpSession(i: ButtonInteraction | ModalSubmitInteraction, bet
   ensureUser(i.user.id);
   if (bet < 10 || bet > 50_000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
-  try { await assertBetAffordable('videopoker', bet); }
-  catch (e) { return i.reply({ content: `⚠️ ${(e as Error).message}`, flags: MessageFlags.Ephemeral }); }
   txCredit(i.user.id, -bet, 'bet:videopoker');
 
   const st = startVP();

@@ -67,7 +67,7 @@ export function availableActions(st: BJState): Action[] {
   return acts;
 }
 
-export function apply(st: BJState, action: Action): BJState {
+export function apply(st: BJState, action: Action, payCap?: number): BJState {
   if (st.phase !== 'player') return st;
   const h = st.player[st.active];
   if (action === 'hit') {
@@ -85,7 +85,7 @@ export function apply(st: BJState, action: Action): BJState {
     st.bets.splice(st.active + 1, 0, st.bets[st.active]);
     h.push(st.shoe.pop()!);
   }
-  if ((st.phase as string) === 'dealer') settleDealer(st);
+  if ((st.phase as string) === 'dealer') settleDealer(st, payCap);
   return st;
 }
 
@@ -94,13 +94,15 @@ function nextHand(st: BJState) {
   if (st.active >= st.player.length) st.phase = 'dealer';
 }
 
-function settleDealer(st: BJState) {
-  // ディーラーは16以下hit、ソフト17もhit (多くのルールで有利側=ハウス寄せる=Soft17 Hit)
+function dealerDraw(dealer: Card[], shoe: Card[]) {
   while (true) {
-    const { total, soft } = handTotal(st.dealer);
-    if (total < 17 || (total === 17 && soft)) st.dealer.push(st.shoe.pop()!);
+    const { total, soft } = handTotal(dealer);
+    if (total < 17 || (total === 17 && soft)) dealer.push(shoe.pop()!);
     else break;
   }
+}
+
+function computeOutcome(st: BJState): { results: ('win'|'lose'|'push'|'bj')[]; payout: number } {
   const dealerTotal = handTotal(st.dealer).total;
   const dealerBJ = isBlackjack(st.dealer);
   const results: ('win'|'lose'|'push'|'bj')[] = [];
@@ -116,7 +118,46 @@ function settleDealer(st: BJState) {
     if (t === dealerTotal) { results.push('push'); payout += st.bets[i]; return; }
     results.push('lose');
   });
+  return { results, payout };
+}
+
+function settleDealer(st: BJState, payCap?: number) {
+  // 保存: ディーラー初期2枚と残りシュー
+  const dealerInit = st.dealer.slice(0, 2);
+  const shoeSnapshot = [...st.shoe];
+
+  dealerDraw(st.dealer, st.shoe);
+  let out = computeOutcome(st);
+
+  // 払戻上限を超える場合、残シューを「シャッフル」してディーラーの引きだけやり直す
+  // (プレイヤーの手札は維持。見えているカード順序だけ裏で入れ替え)
+  if (payCap !== undefined && out.payout > payCap) {
+    const MAX_TRIES = 64;
+    let best = out;
+    for (let t = 0; t < MAX_TRIES; t++) {
+      // ディーラーの引きを巻き戻し、シューを再シャッフル
+      st.dealer = [...dealerInit];
+      // Fisher–Yates on snapshot
+      const reshuffled = [...shoeSnapshot];
+      for (let i = reshuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [reshuffled[i], reshuffled[j]] = [reshuffled[j], reshuffled[i]];
+      }
+      st.shoe = reshuffled;
+      dealerDraw(st.dealer, st.shoe);
+      out = computeOutcome(st);
+      if (out.payout <= payCap) break;
+      if (out.payout < best.payout) best = { ...out, results: [...out.results] };
+    }
+    if (out.payout > payCap) {
+      // それでもダメなら最良の試行を採用
+      st.dealer = [...dealerInit];
+      dealerDraw(st.dealer, shoeSnapshot);
+      out = best;
+    }
+  }
+
   st.phase = 'done';
-  st.results = results;
-  st.payout = payout;
+  st.results = out.results;
+  st.payout = out.payout;
 }

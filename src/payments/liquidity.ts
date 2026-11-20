@@ -93,33 +93,15 @@ export async function cachedLiquidity(): Promise<Awaited<ReturnType<typeof total
 export function invalidateLiquidityCache() { _cache = null; }
 
 /** ベット額 × 最大倍率 ≤ 流動性 を満たすか検査。失敗時は投げる。 */
-export async function assertBetAffordable(game: GameMultKey, bet: number, overrideMult?: number): Promise<void> {
-  // プレイヤー全員のプール済みチップ (= 既に債務として存在) も差し引いて考える
+/**
+ * 「ハウスが今この瞬間に払える gross 上限」。bet は既に台に乗っている想定で、
+ * 実際に wallet から流出するのは payout - その bet 分だが、安全側に effective 全体を返す。
+ */
+export async function housePayoutCap(exceptCrapsSession?: string): Promise<number> {
   const liq = await cachedLiquidity();
   const outstanding = (db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get() as any).s as number;
-  const effective = liq.total - outstanding;
-
-  const mult = overrideMult ?? MAX_GROSS_MULT[game];
-  const maxPay = bet * mult;
-  if (maxPay > effective) {
-    const cap = Math.max(0, Math.floor(effective / mult));
-    throw new Error(
-      `現在このテーブルの BET 上限は **${cap.toLocaleString()}** です。この額以下で再度お試しください。`
-    );
-  }
-}
-
-/** Craps セッションで新ベットを置く際、per-kind + 既存露出 + 他セッション露出を加味して検査。 */
-export async function assertCrapsBetAffordable(sessionId: string, existingExposure: number, newBetMaxGross: number): Promise<void> {
-  const liq = await cachedLiquidity();
-  const outstanding = (db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get() as any).s as number;
-  const otherExp   = totalCrapsExposure(sessionId);
-  const effective  = liq.total - outstanding - otherExp - existingExposure;
-  if (newBetMaxGross > effective) {
-    throw new Error(
-      `現在このテーブルで追加できる BET 上限を超えています。少額に変更するか、既存のベットを決着させてから再度お試しください。`
-    );
-  }
+  const otherCraps = totalCrapsExposure(exceptCrapsSession);
+  return Math.max(0, liq.total - outstanding - otherCraps);
 }
 
 /** 現在の最大許容 BET をゲーム別に返す (UI 表示用)。 */

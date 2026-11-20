@@ -19,6 +19,20 @@ export interface RouletteBet {
 
 export function spinRoulette(): number { return randomInt(0, 37); }
 
+/** 払出が cap を超えない結果が出るまで回し直す。 */
+export function spinRouletteWithCap(bet: RouletteBet, payCap: number): number {
+  const MAX = 64;
+  for (let i = 0; i < MAX; i++) {
+    const r = spinRoulette();
+    if (bet.amount * payoutMult(bet, r) <= payCap) return r;
+  }
+  // 最後のあがき: ハズレになる数字を手動で選ぶ (0 はたいてい外れる)
+  for (let r = 0; r < 37; r++) {
+    if (payoutMult(bet, r) === 0) return r;
+  }
+  return 0;
+}
+
 export const isRed   = (n: number) => RED.has(n);
 export const isBlack = (n: number) => n > 0 && !RED.has(n);
 export const color   = (n: number) => n === 0 ? 'green' : (isRed(n) ? 'red' : 'black');

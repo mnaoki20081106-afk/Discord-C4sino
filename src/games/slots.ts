@@ -32,11 +32,23 @@ export function spin(): SpinResult {
   if (reels[0].id === reels[1].id && reels[1].id === reels[2].id) {
     return { reels, payoutMult: reels[0].pay3, line: '3-of-a-kind' };
   }
-  // チェリー2枚: 左から2つ連続
   if (reels[0].id === '🍒' && reels[1].id === '🍒') {
     return { reels, payoutMult: SYMBOLS[0].pay2, line: '2-cherry' };
   }
   return { reels, payoutMult: 0, line: 'none' };
+}
+
+/** 払出が上限を超えない結果が出るまで回し直す (最大 64 回)。 */
+export function spinWithCap(bet: number, payCap: number): SpinResult {
+  const MAX = 64;
+  for (let i = 0; i < MAX; i++) {
+    const r = spin();
+    if (bet * r.payoutMult <= payCap) return r;
+  }
+  // それでも超える場合: ハズレ結果を強制生成
+  let r: SpinResult;
+  do { r = spin(); } while (r.payoutMult !== 0);
+  return r;
 }
 
 /** 回転アニメ用: 停止位置の周辺を混ぜたリールストリップを返す */

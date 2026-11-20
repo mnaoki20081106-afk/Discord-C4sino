@@ -69,14 +69,31 @@ export interface RollReport {
   log: string;
 }
 
-export function roll(st: CrapsState): RollReport {
+function rollOnce(st: CrapsState): { d1: number; d2: number; total: number; hard: boolean; resolutions: BetResolution[] } {
   const d1 = rollDie(), d2 = rollDie();
   const total = d1 + d2;
   const hard = d1 === d2;
   const comeout = st.phase === 'comeout';
   const point = st.point;
+  const resolutions = st.bets.map(b => resolveBet(b, total, hard, comeout, point));
+  return { d1, d2, total, hard, resolutions };
+}
 
-  const resolutions: BetResolution[] = st.bets.map(b => resolveBet(b, total, hard, comeout, point));
+export function roll(st: CrapsState, payCap?: number): RollReport {
+  let attempt = rollOnce(st);
+  if (payCap !== undefined) {
+    const sumPayout = (rs: BetResolution[]) => rs.reduce((s, r) => s + r.payout, 0);
+    let best = attempt;
+    for (let t = 0; t < 64; t++) {
+      if (sumPayout(attempt.resolutions) <= payCap) break;
+      attempt = rollOnce(st);
+      if (sumPayout(attempt.resolutions) < sumPayout(best.resolutions)) best = attempt;
+    }
+    if (sumPayout(attempt.resolutions) > payCap) attempt = best;
+  }
+  const { d1, d2, total, resolutions } = attempt;
+  const comeout = st.phase === 'comeout';
+  const point = st.point;
 
   // フェーズ遷移 (pass/dontpass 系のベットが無くても更新する)
   let phaseChange: RollReport['phaseChange'];

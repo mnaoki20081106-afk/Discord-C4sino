@@ -77,6 +77,49 @@ export function drawVP(hand: VPHand): VPHand {
   return hand;
 }
 
+/** 払出が cap を超えない結果が出るまで、非HOLD カードを引き直す (最大 64 回)。 */
+export function drawVPWithCap(hand: VPHand, bet: number, payCap: number): VPHand {
+  if (hand.phase !== 'deal') return hand;
+  const origShoe = [...hand.shoe];
+  const origCards = [...hand.cards];
+  const MAX = 64;
+  let best = { rank: 'nothing' as keyof typeof PAY, cards: [...origCards], shoe: [...origShoe] };
+  for (let t = 0; t < MAX; t++) {
+    // Shuffle shoe snapshot and re-draw non-held
+    const shoe = [...origShoe];
+    for (let i = shoe.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shoe[i], shoe[j]] = [shoe[j], shoe[i]];
+    }
+    const cards = [...origCards];
+    for (let i = 0; i < 5; i++) if (!hand.held[i]) cards[i] = shoe.pop()!;
+    const rank = evaluate(cards);
+    if (bet * payoutFor(rank) <= payCap) {
+      hand.shoe = shoe; hand.cards = cards; hand.phase = 'drawn'; hand.rank = rank;
+      return hand;
+    }
+    if (PAY[rank] < PAY[best.rank] || best.rank === 'nothing') best = { rank, cards: [...cards], shoe: [...shoe] };
+  }
+  // ハズレ強制: nothing が出るまで引く
+  for (let t = 0; t < 256; t++) {
+    const shoe = [...origShoe];
+    for (let i = shoe.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shoe[i], shoe[j]] = [shoe[j], shoe[i]];
+    }
+    const cards = [...origCards];
+    for (let i = 0; i < 5; i++) if (!hand.held[i]) cards[i] = shoe.pop()!;
+    const rank = evaluate(cards);
+    if (rank === 'nothing') {
+      hand.shoe = shoe; hand.cards = cards; hand.phase = 'drawn'; hand.rank = rank;
+      return hand;
+    }
+  }
+  // fallback
+  hand.cards = best.cards; hand.shoe = best.shoe; hand.phase = 'drawn'; hand.rank = best.rank;
+  return hand;
+}
+
 export function payoutFor(rank: keyof typeof PAY): number {
   return PAY[rank] ?? 0;
 }
