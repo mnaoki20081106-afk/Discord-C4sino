@@ -23,7 +23,7 @@ import { blackjackPanel, slotsPanel, roulettePanel, baccaratPanel, videopokerPan
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
-import { housePayoutCap, setCrapsExposure, clearCrapsExposure, invalidateLiquidityCache, maxAffordableBet } from './payments/liquidity.js';
+import { housePayoutCap, clampPayout, setCrapsExposure, clearCrapsExposure, invalidateLiquidityCache, maxAffordableBet } from './payments/liquidity.js';
 import { MIN_DEPOSIT_JPY } from './payments/limits.js';
 import { L } from './ui/leet.js';
 import { gameOverview, type GameKey } from './ui/overview.js';
@@ -397,6 +397,7 @@ async function startBJ(i: ButtonInteraction | ModalSubmitInteraction, bet: numbe
 }
 
 async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
+  if (st.phase === 'done') await applyBJClamp(st);
   const buf = await renderBlackjack({
     player: st.player, active: st.active, dealer: st.dealer,
     hideHole: st.phase === 'player',
@@ -411,10 +412,39 @@ async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
   await (i as any).reply({ embeds: [embed], files: [file], components: rows, flags: MessageFlags.Ephemeral });
 
   if (st.phase === 'done') {
-    if (st.payout) txCredit(i.user.id, st.payout, 'win:blackjack', sid);
+    if (st.payout && st.payout > 0) txCredit(i.user.id, st.payout, 'win:blackjack', sid);
     await onGameSettled(i, 'blackjack', st);
     sessions.drop(sid);
   }
+}
+
+/** 払戻しを cap まで clamp し、payout=0 になるハンドの結果は 'lose' に書換 */
+async function applyBJClamp(st: BJState) {
+  if (!st.payout) return;
+  const cap = await housePayoutCap();
+  if (st.payout <= cap) return;
+  // payout を cap に clamp。表示整合のため: 全ハンドをプロラタで減らすのではなく、
+  // 最も payout の大きい win ハンドから順に 'lose' に書き換えて cap 以下にする
+  if (!st.results) return;
+  const idxByPay = st.player
+    .map((_, idx) => ({ idx, hand: idx }))
+    .sort((a, b) => (payoutForHand(st, b.idx) - payoutForHand(st, a.idx)));
+  for (const { idx } of idxByPay) {
+    if (st.payout! <= cap) break;
+    const was = payoutForHand(st, idx);
+    if (was > 0 && st.results[idx] !== 'lose') {
+      st.results[idx] = 'lose';
+      st.payout = (st.payout ?? 0) - was;
+    }
+  }
+  st.payout = Math.max(0, Math.min(st.payout!, cap));
+}
+function payoutForHand(st: BJState, idx: number): number {
+  const r = st.results?.[idx]; const bet = st.bets[idx];
+  if (r === 'bj')   return Math.floor(bet * 2.5);
+  if (r === 'win')  return bet * 2;
+  if (r === 'push') return bet;
+  return 0;
 }
 
 async function onGameSettled(i: ButtonInteraction | ModalSubmitInteraction, game: 'blackjack'|'slots'|'roulette'|'baccarat'|'videopoker'|'craps', st: BJState | null, extBet?: number, extPayout?: number) {
@@ -438,6 +468,7 @@ async function onGameSettled(i: ButtonInteraction | ModalSubmitInteraction, game
 }
 
 async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState) {
+  if (st.phase === 'done') await applyBJClamp(st);
   const buf = await renderBlackjack({
     player: st.player, active: st.active, dealer: st.dealer,
     hideHole: st.phase === 'player',
@@ -450,7 +481,7 @@ async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState) {
   if (st.phase === 'player') rows.push(bjActionsRow(availableActions(st)));
   await i.update({ embeds: [embed], files: [file], components: rows, attachments: [] });
   if (st.phase === 'done') {
-    if (st.payout) txCredit(i.user.id, st.payout, 'win:blackjack', sid);
+    if (st.payout && st.payout > 0) txCredit(i.user.id, st.payout, 'win:blackjack', sid);
     await onGameSettled(i, 'blackjack', st);
     sessions.drop(sid);
   }
@@ -513,8 +544,8 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
   }
 
   if (result.payoutMult > 0) {
-    const win = bet * result.payoutMult;
-    txCredit(i.user.id, win, 'win:slots');
+    const win = await clampPayout(bet * result.payoutMult);
+    if (win > 0) txCredit(i.user.id, win, 'win:slots');
     await onGameSettled(i, 'slots', null, bet, win);
   }
 }
@@ -595,8 +626,8 @@ async function doRouletteSpin(
   }
 
   if (mult > 0) {
-    const win = bet * mult;
-    txCredit(i.user.id, win, 'win:roulette');
+    const win = await clampPayout(bet * mult);
+    if (win > 0) txCredit(i.user.id, win, 'win:roulette');
     await onGameSettled(i, 'roulette', null, bet, win);
   }
 }
@@ -726,9 +757,10 @@ async function doCrapsRoll(i: ButtonInteraction, sid: string, st: CrapsState) {
   if (report.phaseChange === 'pointSet') { st.phase = 'point'; st.point = report.newPoint; }
   if (report.phaseChange === 'pointHit' || report.phaseChange === 'seven_out') { st.phase = 'comeout'; st.point = undefined; }
 
-  // 残高加算
+  // 残高加算 (最終 clamp)
   if (totalPayout > 0) {
-    txCredit(i.user.id, totalPayout, 'win:craps', sid);
+    totalPayout = await clampPayout(totalPayout, sid);
+    if (totalPayout > 0) txCredit(i.user.id, totalPayout, 'win:craps', sid);
     st.totalReturned += totalPayout;
   }
 
@@ -787,8 +819,8 @@ async function doBaccarat(i: ModalSubmitInteraction, side: BacSide, bet: number)
   await i.reply({ files: [new AttachmentBuilder(buf, { name: 'bac.png' })], flags: MessageFlags.Ephemeral });
 
   if (mult > 0) {
-    const payout = Math.floor(bet * mult);
-    txCredit(i.user.id, payout, 'win:baccarat');
+    const payout = await clampPayout(Math.floor(bet * mult));
+    if (payout > 0) txCredit(i.user.id, payout, 'win:baccarat');
     if (mult > 1) await onGameSettled(i, 'baccarat', null, bet, payout);
   }
 }
@@ -823,8 +855,8 @@ async function onVpButton(i: ButtonInteraction, kind: string, arg: string) {
       if (st.phase === 'drawn' && st.rank) {
         const mult = payoutFor(st.rank);
         if (mult > 0) {
-          const payout = Math.floor(entry.bet * mult);
-          txCredit(i.user.id, payout, 'win:videopoker');
+          const payout = await clampPayout(Math.floor(entry.bet * mult));
+          if (payout > 0) txCredit(i.user.id, payout, 'win:videopoker');
           await onGameSettled(i, 'videopoker', null, entry.bet, payout);
         }
         sessions.drop(sid);

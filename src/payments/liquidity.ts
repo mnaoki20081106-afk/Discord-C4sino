@@ -104,6 +104,16 @@ export async function housePayoutCap(exceptCrapsSession?: string): Promise<numbe
   return Math.max(0, liq.total - outstanding - otherCraps);
 }
 
+/**
+ * 最終防衛線: 実際に chip 加算する直前に呼ぶ。
+ * 現在の housePayoutCap を越えないよう amount をクランプして返す。
+ */
+export async function clampPayout(amount: number, exceptCrapsSession?: string): Promise<number> {
+  if (amount <= 0) return 0;
+  const cap = await housePayoutCap(exceptCrapsSession);
+  return Math.min(amount, cap);
+}
+
 /** 現在の最大許容 BET をゲーム別に返す (UI 表示用)。 */
 export async function maxAffordableBet(): Promise<Record<GameMultKey, number> & { liq: Awaited<ReturnType<typeof totalLiquidityJpy>>; outstanding: number; effective: number }> {
   const liq = await cachedLiquidity();
