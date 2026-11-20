@@ -1,5 +1,6 @@
 import { createCanvas, SKRSContext2D } from '@napi-rs/canvas';
 import type { Symbol as SlotSym } from '../games/slots.js';
+import { L } from './leet.js';
 
 const W = 720, H = 480;
 
@@ -49,7 +50,7 @@ export async function renderSlots(i: RenderSlotsInput): Promise<Buffer> {
   ctx.font = 'bold 32px serif';
   ctx.textAlign = 'center';
   ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 10;
-  ctx.fillText('★ C4S1N0 5L0T5 ★', W/2, 70);
+  ctx.fillText(`★ ${L('C4SINO')} ${L('SLOTS')} ★`, W/2, 70);
   ctx.shadowBlur = 0;
 
   // リール筐体
@@ -103,26 +104,26 @@ export async function renderSlots(i: RenderSlotsInput): Promise<Buffer> {
   ctx.textBaseline = 'alphabetic';
   ctx.fillStyle = '#ffd93d';
   ctx.font = 'bold 18px sans-serif';
-  ctx.fillText(`B3T  ${i.bet.toLocaleString()}`, 50, H-50);
+  ctx.fillText(`${L('BET')}  ${i.bet.toLocaleString()}`, 50, H-50);
   ctx.textAlign = 'right';
-  ctx.fillText(`B4L4NC3  ${i.balance.toLocaleString()}`, W-50, H-50);
+  ctx.fillText(`${L('BALANCE')}  ${i.balance.toLocaleString()}`, W-50, H-50);
 
   ctx.textAlign = 'center';
   if (i.spinning) {
     ctx.fillStyle = '#fff';
     ctx.font = 'bold 20px sans-serif';
-    ctx.fillText('5P1NN1NG…', W/2, H-50);
+    ctx.fillText(`${L('SPINNING')}…`, W/2, H-50);
   } else if (i.payoutMult > 0) {
     const win = i.bet * i.payoutMult;
     ctx.fillStyle = '#22c55e';
     ctx.font = 'bold 26px sans-serif';
     ctx.shadowColor = '#22c55e'; ctx.shadowBlur = 15;
-    ctx.fillText(`${i.label ?? 'W1N'}  +${win.toLocaleString()}`, W/2, H-45);
+    ctx.fillText(`${i.label ?? L('WIN')}  +${win.toLocaleString()}`, W/2, H-45);
     ctx.shadowBlur = 0;
   } else {
     ctx.fillStyle = '#9ca3af';
     ctx.font = '18px sans-serif';
-    ctx.fillText('— n0 w1n —', W/2, H-50);
+    ctx.fillText(`— ${L('no')} ${L('win')} —`, W/2, H-50);
   }
 
   return await canvas.encode('png');

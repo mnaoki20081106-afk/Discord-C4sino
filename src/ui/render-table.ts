@@ -1,6 +1,7 @@
 import { createCanvas, SKRSContext2D, GlobalFonts } from '@napi-rs/canvas';
 import type { Card } from '../games/blackjack.js';
 import { handTotal, isBlackjack } from '../games/blackjack.js';
+import { L } from './leet.js';
 
 const W = 900, H = 520;
 const CARD_W = 90, CARD_H = 130, RADIUS = 10;
@@ -139,9 +140,9 @@ export async function renderBlackjack(i: RenderBJInput): Promise<Buffer> {
   ctx.fillStyle = 'rgba(212,175,55,0.9)';
   ctx.font = 'bold 22px serif';
   ctx.textAlign = 'center';
-  ctx.fillText('BL4CKJ4CK  —  p4ys 3 t0 2', W/2, 40);
+  ctx.fillText(`${L('BLACKJACK')}  —  ${L('pays')} 3 ${L('to')} 2`, W/2, 40);
   ctx.font = '12px sans-serif';
-  ctx.fillText('D34l3r must st4nd 0n 17 4nd dr4w t0 16', W/2, 58);
+  ctx.fillText(`${L('Dealer')} ${L('must')} ${L('stand')} ${L('on')} 17 ${L('and')} ${L('draw')} ${L('to')} 16`, W/2, 58);
   ctx.textAlign = 'start';
 
   // ディーラー
@@ -153,7 +154,7 @@ export async function renderBlackjack(i: RenderBJInput): Promise<Buffer> {
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 18px sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(`D34l3r${dTotal!==null?` — ${dTotal}${isBlackjack(i.dealer)?' BJ':''}`:''}`, W/2, 240);
+  ctx.fillText(`${L('Dealer')}${dTotal!==null?` — ${dTotal}${isBlackjack(i.dealer)?` ${L('BJ')}`:''}`:''}`, W/2, 240);
 
   // プレイヤー (最大4ハンド横並び)
   const handCount = i.player.length;
@@ -165,13 +166,13 @@ export async function renderBlackjack(i: RenderBJInput): Promise<Buffer> {
     const active = idx === i.active && i.phase === 'player';
     ctx.fillStyle = active ? '#fbbf24' : '#fff';
     ctx.font = `${active?'bold ':''}16px sans-serif`;
-    ctx.fillText(`H4nd ${idx+1}: ${t}`, cx, 450);
+    ctx.fillText(`${L('Hand')} ${idx+1}: ${t}`, cx, 450);
     ctx.font = '13px sans-serif';
     ctx.fillStyle = '#ddd';
-    ctx.fillText(`b3t ${i.bets[idx]}`, cx, 468);
+    ctx.fillText(`${L('bet')} ${i.bets[idx]}`, cx, 468);
     if (i.results?.[idx]) {
       const r = i.results[idx];
-      const label = r==='win'?'W1N':r==='bj'?'BL4CKJ4CK':r==='push'?'PU5H':'L0S3';
+      const label = r==='win'?L('WIN'):r==='bj'?L('BLACKJACK'):r==='push'?L('PUSH'):L('LOSE');
       const col = r==='lose'?'#ef4444':r==='push'?'#9ca3af':'#22c55e';
       ctx.fillStyle = col;
       ctx.font = 'bold 20px sans-serif';
@@ -183,13 +184,13 @@ export async function renderBlackjack(i: RenderBJInput): Promise<Buffer> {
   ctx.textAlign = 'left';
   ctx.fillStyle = '#d4af37';
   ctx.font = 'bold 14px sans-serif';
-  ctx.fillText(`💰 ${i.balance.toLocaleString()} ch1ps`, 20, H - 16);
+  ctx.fillText(`💰 ${i.balance.toLocaleString()} ${L('chips')}`, 20, H - 16);
   if (i.phase === 'done' && i.payout !== undefined) {
     ctx.textAlign = 'right';
     const net = i.payout - i.bets.reduce((a,b)=>a+b,0);
     ctx.fillStyle = net>0?'#22c55e':net<0?'#ef4444':'#9ca3af';
     ctx.font = 'bold 16px sans-serif';
-    ctx.fillText(`${net>=0?'+':''}${net} ch1ps`, W-20, H-16);
+    ctx.fillText(`${net>=0?'+':''}${net} ${L('chips')}`, W-20, H-16);
   }
 
   return await canvas.encode('png');

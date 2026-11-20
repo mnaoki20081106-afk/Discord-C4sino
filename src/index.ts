@@ -14,6 +14,7 @@ import { renderSlots } from './ui/render-slots.js';
 import { blackjackPanel, slotsPanel, depositPanel, bjActionsRow } from './ui/panels.js';
 import { submitClaim, notifyAdmins, approve, reject } from './payments/paypay.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
+import { L } from './ui/leet.js';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
@@ -63,7 +64,7 @@ async function onCommand(i: ChatInputCommandInteraction) {
     await i.reply({ content: `✅ ${game} パネルを設置`, flags: MessageFlags.Ephemeral });
   } else if (i.commandName === 'balance') {
     const bal = getBalance(i.user.id);
-    await i.reply({ content: `💰 残高: **${bal.toLocaleString()} chips**`, flags: MessageFlags.Ephemeral });
+    await i.reply({ content: `💰 残高: **${bal.toLocaleString()} ${L('chips')}**`, flags: MessageFlags.Ephemeral });
   } else if (i.commandName === 'admin-channel') {
     if (!i.memberPermissions?.has(PermissionFlagsBits.Administrator))
       return i.reply({ content: '管理者のみ', flags: MessageFlags.Ephemeral });
@@ -81,7 +82,7 @@ async function onButton(i: ButtonInteraction) {
   if (ns === 'dep') return onDepositButton(i, kind, arg);
   if (ns === 'bal') {
     const bal = getBalance(i.user.id);
-    return i.reply({ content: `💰 残高: **${bal.toLocaleString()} ch1ps**`, flags: MessageFlags.Ephemeral });
+    return i.reply({ content: `💰 残高: **${bal.toLocaleString()} ${L('chips')}**`, flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -90,9 +91,9 @@ async function onButton(i: ButtonInteraction) {
 async function onBJButton(i: ButtonInteraction, kind: string, arg: string) {
   if (kind === 'bet') {
     if (arg === 'custom') {
-      const modal = new ModalBuilder().setCustomId('bj:custombet').setTitle('BL4CKJ4CK — Cust0m B3t')
+      const modal = new ModalBuilder().setCustomId('bj:custombet').setTitle(`${L('BLACKJACK')} — ${L('Custom')} ${L('Bet')}`)
         .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
-          new TextInputBuilder().setCustomId('amt').setLabel('B3T (ch1ps)').setStyle(TextInputStyle.Short).setRequired(true)
+          new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)
         ));
       return i.showModal(modal);
     }
@@ -195,9 +196,9 @@ async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState, n
 async function onSlotButton(i: ButtonInteraction, kind: string, arg: string) {
   if (kind !== 'spin') return;
   if (arg === 'custom') {
-    const modal = new ModalBuilder().setCustomId('slot:custombet').setTitle('5L0T5 — Cust0m B3t')
+    const modal = new ModalBuilder().setCustomId('slot:custombet').setTitle(`${L('SLOTS')} — ${L('Custom')} ${L('Bet')}`)
       .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder().setCustomId('amt').setLabel('B3T (ch1ps)').setStyle(TextInputStyle.Short).setRequired(true)
+        new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)
       ));
     return i.showModal(modal);
   }
@@ -244,7 +245,7 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
       bet, balance: getBalance(i.user.id),
       payoutMult: spinning ? 0 : result.payoutMult,
       spinning,
-      label: !spinning && result.payoutMult >= 100 ? (result.payoutMult >= 1000 ? 'J4CKP0T' : 'B1G W1N') : 'W1N',
+      label: !spinning && result.payoutMult >= 100 ? (result.payoutMult >= 1000 ? L('JACKPOT') : `${L('BIG')} ${L('WIN')}`) : L('WIN'),
     });
     await i.editReply({ files: [new AttachmentBuilder(buf, { name: 's.png' })] });
   }
