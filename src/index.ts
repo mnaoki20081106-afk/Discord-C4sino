@@ -29,6 +29,7 @@ import * as withdraw from './payments/withdraw.js';
 import { L } from './ui/leet.js';
 import { gameOverview, type GameKey } from './ui/overview.js';
 import * as ach from './achievements.js';
+import { syncGuildAutoMod, syncAllGuilds, AUTOMOD_RULE_NAME } from './moderation/automod.js';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
@@ -52,7 +53,20 @@ function getAdminChannel(guildId: string): string | null {
 // PayPay ログイン進行状態 (discordUserId -> { sidecarSession, label, phone, guildId })
 const paypayLoginFlow = new Map<string, { sess: string; label: string; phone: string }>();
 
-client.once(Events.ClientReady, c => console.log(`[bot] online as ${c.user.tag}`));
+client.once(Events.ClientReady, async c => {
+  console.log(`[bot] online as ${c.user.tag}`);
+  try { await syncAllGuilds(c as unknown as { guilds: { cache: Map<string, any> } }); }
+  catch (e) { console.error('[automod] initial sync failed:', (e as Error).message); }
+});
+
+client.on(Events.GuildCreate, async g => {
+  try {
+    const r = await syncGuildAutoMod(g);
+    console.log(`[automod] guildCreate ${g.id}: ${r.action}${r.reason ? ` — ${r.reason}` : ''}`);
+  } catch (e) {
+    console.error(`[automod] guildCreate ${g.id} sync failed:`, (e as Error).message);
+  }
+});
 
 client.on(Events.InteractionCreate, async (i) => {
   try {
@@ -297,6 +311,19 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
     }).join('\n');
     const embed = new EmbedBuilder().setTitle(`📜 <@${u.id}> のTX`).setDescription(list).setFooter({ text: `現残高 ${bal.toLocaleString()}` });
     return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+  }
+  if (sub === 'automod-sync') {
+    if (!i.guild) return i.reply({ content: 'ギルド内で実行してください', flags: MessageFlags.Ephemeral });
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const r = await syncGuildAutoMod(i.guild);
+      const msg = r.action === 'skipped'
+        ? `⚠️ スキップ: ${r.reason}`
+        : `✅ AutoMod rule \`${AUTOMOD_RULE_NAME}\` を ${r.action} しました${r.ruleId ? ` (id: ${r.ruleId})` : ''}`;
+      return i.editReply(msg);
+    } catch (e: any) {
+      return i.editReply(`❌ AutoMod sync 失敗: ${e.message}`);
+    }
   }
   if (sub === 'achievements') {
     const ch = i.options.getChannel('channel');

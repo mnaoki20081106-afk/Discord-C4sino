@@ -1,0 +1,145 @@
+import {
+  Guild,
+  AutoModerationRuleTriggerType,
+  AutoModerationRuleEventType,
+  AutoModerationActionType,
+  AutoModerationRuleKeywordPresetType,
+  PermissionFlagsBits,
+  type AutoModerationActionOptions,
+} from 'discord.js';
+
+export const AUTOMOD_RULE_NAME = 'c4sino-ward';
+
+// 直接語 (word-boundary 一致)。60文字以下 / 最大1000個。
+// 頻出誤爆語 (例: "bet" が "better/between" に当たる) は keyword ではなく regex 側で境界付き制御する。
+const KEYWORDS: string[] = [
+  // 代表語
+  'カジノ', 'casino',
+  'ギャンブル', 'gamble', 'gambling',
+  '賭博', 'ばくち', '博打',
+  // ゲーム名
+  'ブラックジャック', 'blackjack',
+  'スロット', 'slots',
+  'ルーレット', 'roulette',
+  'バカラ', 'baccarat',
+  'ビデオポーカー', 'videopoker', 'video poker',
+  'クラップス', 'craps',
+  // ベット/配当語
+  'ベット', '賭け', '賭ける',
+  'ジャックポット', 'jackpot',
+  'ペイアウト', 'payout',
+  'ハウスエッジ',
+  // 支払い/チップ
+  'paypay', 'ペイペイ',
+  'litecoin', 'ライトコイン',
+  '送金リンク',
+  '入金', '出金', 'チャージ',
+  // Bot / サービス固有
+  'c4sino', 'ccasino', 'キャシノ',
+];
+
+// 伏字/区切り挿入パターン (regex, 10本まで, 1本260字以内, Rust regex, (?i) で case-insensitive)
+const REGEXES: string[] = [
+  // カジノ 変種: カ◯ジ〇ノ / カ_ジ-ノ / カ ジ ノ / カ.ジ.ノ etc.
+  'カ[\\s\\p{P}\\p{S}ー_＿．.・•●○◯〇\\-ｰ]{0,3}ジ[\\s\\p{P}\\p{S}ー_＿．.・•●○◯〇\\-ｰ]{0,3}ノ',
+  // casino 変種 (英字区切り / leet): c a s i n o / c-a-s-i-n-o / c4sino / cas1no
+  '(?i)c[\\s\\p{P}\\p{S}_\\-]{0,2}[a4@][\\s\\p{P}\\p{S}_\\-]{0,2}s[\\s\\p{P}\\p{S}_\\-]{0,2}[i1!|][\\s\\p{P}\\p{S}_\\-]{0,2}n[\\s\\p{P}\\p{S}_\\-]{0,2}o',
+  // ギャンブル 変種
+  'ギ[\\s\\p{P}\\p{S}ー_＿]{0,2}ャ[\\s\\p{P}\\p{S}ー_＿]{0,2}ン[\\s\\p{P}\\p{S}ー_＿]{0,2}ブ[\\s\\p{P}\\p{S}ー_＿]{0,2}ル',
+  // スロット 変種
+  'ス[\\s\\p{P}\\p{S}ー_＿]{0,2}ロ[\\s\\p{P}\\p{S}ー_＿]{0,2}ッ?[\\s\\p{P}\\p{S}ー_＿]{0,2}ト',
+  // ルーレット 変種
+  'ル[\\s\\p{P}\\p{S}ー_＿]{0,2}ー?[\\s\\p{P}\\p{S}ー_＿]{0,2}レ[\\s\\p{P}\\p{S}ー_＿]{0,2}ッ?[\\s\\p{P}\\p{S}ー_＿]{0,2}ト',
+  // バカラ 変種
+  'バ[\\s\\p{P}\\p{S}ー_＿]{0,2}カ[\\s\\p{P}\\p{S}ー_＿]{0,2}ラ',
+  // 賭 (1文字でも含んだら) に続いて関連語
+  '(?:賭|か)け[\\s]?(?:事|金|る|て|た|ろ)',
+  // 送金 / 入出金 の組み合わせ
+  '(?:送金|入金|出金)[\\s\\p{P}]{0,3}(?:リンク|url|URL|ID|額)',
+  // paypay / ペイペイ 変種
+  '(?i)p[\\s\\p{P}\\p{S}_\\-]{0,2}a[\\s\\p{P}\\p{S}_\\-]{0,2}y[\\s\\p{P}\\p{S}_\\-]{0,2}p[\\s\\p{P}\\p{S}_\\-]{0,2}a[\\s\\p{P}\\p{S}_\\-]{0,2}y',
+  // blackjack / bj 変種
+  '(?i)b[\\s\\p{P}\\p{S}_\\-]{0,2}l?[\\s\\p{P}\\p{S}_\\-]{0,2}a[\\s\\p{P}\\p{S}_\\-]{0,2}c?k?[\\s\\p{P}\\p{S}_\\-]{0,2}j[\\s\\p{P}\\p{S}_\\-]{0,2}a[\\s\\p{P}\\p{S}_\\-]{0,2}c[\\s\\p{P}\\p{S}_\\-]{0,2}k',
+];
+
+// 伏字 (ユーザーが指示されたら使うべき形) は allow_list に入れない。
+// 誤爆回避の除外語だけ列挙する。
+const ALLOW_LIST: string[] = [
+  // 一般名詞/固有名詞の誤爆回避
+  'カジノロワイヤル', 'カジノ・ロワイヤル',
+];
+
+const CUSTOM_MESSAGE =
+  'このサーバーではその語は送信できません。伏字 (例: カ◯ジノ, s|ots, ルー◯ット) を使ってください。';
+
+const ACTIONS: AutoModerationActionOptions[] = [
+  {
+    type: AutoModerationActionType.BlockMessage,
+    metadata: { customMessage: CUSTOM_MESSAGE },
+  },
+];
+
+export interface AutoModSyncResult {
+  action: 'created' | 'updated' | 'noop' | 'skipped';
+  reason?: string;
+  ruleId?: string;
+}
+
+/**
+ * 指定 Guild に AutoMod rule を upsert する。
+ * - 既存の同名 rule があれば update、無ければ create
+ * - Bot の権限 (ManageGuild) が無ければ skipped を返す
+ * - 例外は呼び出し元で扱えるよう re-throw する (sync コマンドでユーザーに見せる)
+ */
+export async function syncGuildAutoMod(
+  guild: Guild,
+  opts?: { exemptRoleIds?: string[]; exemptChannelIds?: string[] }
+): Promise<AutoModSyncResult> {
+  const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
+  if (!me) return { action: 'skipped', reason: 'bot member not resolvable' };
+  if (!me.permissions.has(PermissionFlagsBits.ManageGuild)) {
+    return { action: 'skipped', reason: 'bot lacks ManageGuild' };
+  }
+
+  const rules = await guild.autoModerationRules.fetch().catch(() => null);
+  if (!rules) return { action: 'skipped', reason: 'failed to fetch rules' };
+
+  const existing = rules.find(r => r.name === AUTOMOD_RULE_NAME);
+
+  const common = {
+    name: AUTOMOD_RULE_NAME,
+    eventType: AutoModerationRuleEventType.MessageSend,
+    triggerType: AutoModerationRuleTriggerType.Keyword,
+    triggerMetadata: {
+      keywordFilter: KEYWORDS,
+      regexPatterns: REGEXES,
+      allowList: ALLOW_LIST,
+      presets: [] as AutoModerationRuleKeywordPresetType[],
+    },
+    actions: ACTIONS,
+    enabled: true,
+    exemptRoles: opts?.exemptRoleIds ?? [],
+    exemptChannels: opts?.exemptChannelIds ?? [],
+    reason: 'c4sino word guard sync',
+  };
+
+  if (!existing) {
+    const r = await guild.autoModerationRules.create(common);
+    return { action: 'created', ruleId: r.id };
+  }
+  const r = await existing.edit(common);
+  return { action: 'updated', ruleId: r.id };
+}
+
+export async function syncAllGuilds(
+  client: { guilds: { cache: Map<string, Guild> } }
+): Promise<void> {
+  for (const g of client.guilds.cache.values()) {
+    try {
+      const r = await syncGuildAutoMod(g);
+      console.log(`[automod] ${g.id} (${g.name}): ${r.action}${r.reason ? ` — ${r.reason}` : ''}${r.ruleId ? ` [${r.ruleId}]` : ''}`);
+    } catch (e) {
+      console.error(`[automod] ${g.id} sync failed:`, (e as Error).message);
+    }
+  }
+}
