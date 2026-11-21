@@ -97,7 +97,17 @@ const admin = new SlashCommandBuilder()
     .addChannelOption(o => o.setName('channel').setDescription('設定するチャンネル (空で解除)').setRequired(false))
     .addStringOption(o => o.setName('base').setDescription('チャンネル名のベース (例: 実績 → 実績-実績12件)').setRequired(false)));
 
-const commands = [setup, balance, overview, pay, withdraw, wallet, admin].map(c => c.toJSON());
+const bannedWords = new SlashCommandBuilder()
+  .setName('banned-words')
+  .setDescription('ワード規制 (AutoMod) の NG ワード管理 (管理者)')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
+  .addSubcommand(s => s.setName('add').setDescription('NG ワードを追加')
+    .addStringOption(o => o.setName('word').setDescription('追加するワード (60文字以下)').setRequired(true)))
+  .addSubcommand(s => s.setName('list').setDescription('NG ワード一覧を表示'))
+  .addSubcommand(s => s.setName('remove').setDescription('NG ワードを削除')
+    .addStringOption(o => o.setName('word').setDescription('削除するワード').setRequired(true)));
+
+const commands = [setup, balance, overview, pay, withdraw, wallet, admin, bannedWords].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN!);
 const clientId = process.env.DISCORD_CLIENT_ID!;

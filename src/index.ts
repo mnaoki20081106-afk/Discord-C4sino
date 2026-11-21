@@ -29,7 +29,10 @@ import * as withdraw from './payments/withdraw.js';
 import { L } from './ui/leet.js';
 import { gameOverview, type GameKey } from './ui/overview.js';
 import * as ach from './achievements.js';
-import { syncGuildAutoMod, syncAllGuilds, AUTOMOD_RULE_NAME } from './moderation/automod.js';
+import {
+  syncGuildAutoMod, syncAllGuilds, AUTOMOD_RULE_NAME,
+  listBannedWords, addBannedWord, removeBannedWord, getExtraKeywords, BUILTIN_KEYWORDS,
+} from './moderation/automod.js';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
@@ -55,13 +58,13 @@ const paypayLoginFlow = new Map<string, { sess: string; label: string; phone: st
 
 client.once(Events.ClientReady, async c => {
   console.log(`[bot] online as ${c.user.tag}`);
-  try { await syncAllGuilds(c as unknown as { guilds: { cache: Map<string, any> } }); }
+  try { await syncAllGuilds(c as unknown as { guilds: { cache: Map<string, any> } }, getExtraKeywords); }
   catch (e) { console.error('[automod] initial sync failed:', (e as Error).message); }
 });
 
 client.on(Events.GuildCreate, async g => {
   try {
-    const r = await syncGuildAutoMod(g);
+    const r = await syncGuildAutoMod(g, { extraKeywords: getExtraKeywords(g.id) });
     console.log(`[automod] guildCreate ${g.id}: ${r.action}${r.reason ? ` — ${r.reason}` : ''}`);
   } catch (e) {
     console.error(`[automod] guildCreate ${g.id} sync failed:`, (e as Error).message);
@@ -95,6 +98,58 @@ async function onCommand(i: ChatInputCommandInteraction) {
     case 'pay':      return cmdPay(i);
     case 'withdraw': return cmdWithdraw(i);
     case 'overview': return cmdOverview(i);
+    case 'banned-words': return cmdBannedWords(i);
+  }
+}
+
+async function cmdBannedWords(i: ChatInputCommandInteraction) {
+  if (!i.guild) return i.reply({ content: 'ギルド内で実行してください', flags: MessageFlags.Ephemeral });
+  const sub = i.options.getSubcommand();
+
+  if (sub === 'add') {
+    const word = i.options.getString('word', true);
+    const r = addBannedWord(i.guild.id, word, i.user.id);
+    if (!r.added) return i.reply({ content: `⚠️ 追加失敗: ${r.reason}`, flags: MessageFlags.Ephemeral });
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const sr = await syncGuildAutoMod(i.guild, { extraKeywords: getExtraKeywords(i.guild.id) });
+      const note = sr.action === 'skipped' ? ` (⚠️ 同期スキップ: ${sr.reason})` : ` — AutoMod ${sr.action}`;
+      return i.editReply(`✅ \`${word}\` を追加しました${note}`);
+    } catch (e: any) {
+      return i.editReply(`✅ \`${word}\` を DB に追加 / ❌ AutoMod 同期失敗: ${e.message}`);
+    }
+  }
+
+  if (sub === 'remove') {
+    const word = i.options.getString('word', true);
+    const ok = removeBannedWord(i.guild.id, word);
+    if (!ok) return i.reply({ content: `⚠️ \`${word}\` は登録されていません`, flags: MessageFlags.Ephemeral });
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    try {
+      const sr = await syncGuildAutoMod(i.guild, { extraKeywords: getExtraKeywords(i.guild.id) });
+      const note = sr.action === 'skipped' ? ` (⚠️ 同期スキップ: ${sr.reason})` : ` — AutoMod ${sr.action}`;
+      return i.editReply(`🗑️ \`${word}\` を削除しました${note}`);
+    } catch (e: any) {
+      return i.editReply(`🗑️ \`${word}\` を DB から削除 / ❌ AutoMod 同期失敗: ${e.message}`);
+    }
+  }
+
+  if (sub === 'list') {
+    const custom = listBannedWords(i.guild.id);
+    const customLines = custom.length
+      ? custom.map(r => `\`${r.word}\`  — <@${r.added_by}>  <t:${r.created_at}:R>`).join('\n')
+      : '_(なし)_';
+    const builtinPreview = BUILTIN_KEYWORDS.slice(0, 30).map(w => `\`${w}\``).join(', ')
+      + (BUILTIN_KEYWORDS.length > 30 ? ` … (計 ${BUILTIN_KEYWORDS.length} 語)` : '');
+    const embed = new EmbedBuilder()
+      .setTitle('🚫 NG ワード一覧')
+      .setColor(0xd4af37)
+      .addFields(
+        { name: `📝 カスタム (${custom.length})`, value: customLines.slice(0, 1024), inline: false },
+        { name: `🔒 内蔵 (${BUILTIN_KEYWORDS.length})`, value: builtinPreview.slice(0, 1024), inline: false },
+      )
+      .setFooter({ text: '内蔵語は編集不可 / 変種は regex で別途カバー' });
+    return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -316,7 +371,7 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
     if (!i.guild) return i.reply({ content: 'ギルド内で実行してください', flags: MessageFlags.Ephemeral });
     await i.deferReply({ flags: MessageFlags.Ephemeral });
     try {
-      const r = await syncGuildAutoMod(i.guild);
+      const r = await syncGuildAutoMod(i.guild, { extraKeywords: getExtraKeywords(i.guild.id) });
       const msg = r.action === 'skipped'
         ? `⚠️ スキップ: ${r.reason}`
         : `✅ AutoMod rule \`${AUTOMOD_RULE_NAME}\` を ${r.action} しました${r.ruleId ? ` (id: ${r.ruleId})` : ''}`;

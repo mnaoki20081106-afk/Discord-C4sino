@@ -7,6 +7,38 @@ import {
   PermissionFlagsBits,
   type AutoModerationActionOptions,
 } from 'discord.js';
+import { db } from '../db/schema.js';
+
+db.exec(`CREATE TABLE IF NOT EXISTS automod_banned_words (
+  guild_id   TEXT NOT NULL,
+  word       TEXT NOT NULL,
+  added_by   TEXT NOT NULL,
+  created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  PRIMARY KEY (guild_id, word)
+);`);
+
+export function listBannedWords(guildId: string): Array<{ word: string; added_by: string; created_at: number }> {
+  return db.prepare('SELECT word, added_by, created_at FROM automod_banned_words WHERE guild_id=? ORDER BY created_at DESC')
+    .all(guildId) as any;
+}
+
+export function addBannedWord(guildId: string, word: string, addedBy: string): { added: boolean; reason?: string } {
+  const w = word.trim();
+  if (!w) return { added: false, reason: '空の語は追加できません' };
+  if (w.length > 60) return { added: false, reason: '60文字以下にしてください (Discord AutoMod 制約)' };
+  const info = db.prepare('INSERT OR IGNORE INTO automod_banned_words(guild_id, word, added_by) VALUES (?,?,?)').run(guildId, w, addedBy);
+  if (info.changes === 0) return { added: false, reason: '既に登録済みです' };
+  return { added: true };
+}
+
+export function removeBannedWord(guildId: string, word: string): boolean {
+  const info = db.prepare('DELETE FROM automod_banned_words WHERE guild_id=? AND word=?').run(guildId, word.trim());
+  return info.changes > 0;
+}
+
+export function getExtraKeywords(guildId: string): string[] {
+  return (db.prepare('SELECT word FROM automod_banned_words WHERE guild_id=?').all(guildId) as Array<{word:string}>).map(r => r.word);
+}
 
 export const AUTOMOD_RULE_NAME = 'c4sino-ward';
 
@@ -91,9 +123,11 @@ export interface AutoModSyncResult {
  * - Bot の権限 (ManageGuild) が無ければ skipped を返す
  * - 例外は呼び出し元で扱えるよう re-throw する (sync コマンドでユーザーに見せる)
  */
+export const BUILTIN_KEYWORDS = KEYWORDS;
+
 export async function syncGuildAutoMod(
   guild: Guild,
-  opts?: { exemptRoleIds?: string[]; exemptChannelIds?: string[] }
+  opts?: { exemptRoleIds?: string[]; exemptChannelIds?: string[]; extraKeywords?: string[] }
 ): Promise<AutoModSyncResult> {
   const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
   if (!me) return { action: 'skipped', reason: 'bot member not resolvable' };
@@ -111,7 +145,7 @@ export async function syncGuildAutoMod(
     eventType: AutoModerationRuleEventType.MessageSend,
     triggerType: AutoModerationRuleTriggerType.Keyword,
     triggerMetadata: {
-      keywordFilter: KEYWORDS,
+      keywordFilter: mergeKeywords(KEYWORDS, opts?.extraKeywords ?? []),
       regexPatterns: REGEXES,
       allowList: ALLOW_LIST,
       presets: [] as AutoModerationRuleKeywordPresetType[],
@@ -132,14 +166,32 @@ export async function syncGuildAutoMod(
 }
 
 export async function syncAllGuilds(
-  client: { guilds: { cache: Map<string, Guild> } }
+  client: { guilds: { cache: Map<string, Guild> } },
+  resolveExtra?: (guildId: string) => string[]
 ): Promise<void> {
   for (const g of client.guilds.cache.values()) {
     try {
-      const r = await syncGuildAutoMod(g);
+      const extra = resolveExtra?.(g.id) ?? [];
+      const r = await syncGuildAutoMod(g, { extraKeywords: extra });
       console.log(`[automod] ${g.id} (${g.name}): ${r.action}${r.reason ? ` — ${r.reason}` : ''}${r.ruleId ? ` [${r.ruleId}]` : ''}`);
     } catch (e) {
       console.error(`[automod] ${g.id} sync failed:`, (e as Error).message);
     }
   }
+}
+
+// 内蔵 + ギルド独自の語をマージ。lowercase 比較で重複排除し、1000個・60字制限に収める。
+function mergeKeywords(builtin: string[], extra: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const w of [...builtin, ...extra]) {
+    const t = w.trim();
+    if (!t || t.length > 60) continue;
+    const key = t.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+    if (out.length >= 1000) break;
+  }
+  return out;
 }
