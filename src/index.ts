@@ -2200,12 +2200,10 @@ setInterval(ltcPoll, 60_000);
 
 /* ────────────── PayPay 定期残高同期 ────────────── */
 
-/** 5 分ごとに運営 PayPay ウォレットの残高を外部システムと同期する。
- *  balance_cached はトランザクション毎に adjustCached で即時更新しているので、
- *  この定期同期はドリフト修正用。paython-wrapper の verified API である
- *  get_balance() のみを使う。 */
+/** 5 分ごとに運営 PayPay ウォレットの残高を実 API と同期する。
+ *  balance_cached は入出金の都度 adjustCached で即時更新しているので、
+ *  この定期同期はドリフト修正用。 */
 async function paypayPeriodicSync() {
-  if (!process.env.PAYPAY_SIDECAR_URL) return;
   const rows = wallets.listWallets('paypay').filter(w => w.enabled && w.access_token);
   for (const w of rows) {
     try {
