@@ -94,6 +94,18 @@ const admin = new SlashCommandBuilder()
   .addSubcommand(s => s.setName('automod-sync').setDescription('ワード規制 (AutoMod) を このサーバーに同期'))
   .addSubcommand(s => s.setName('user').setDescription('ユーザー総合ビュー (残高/取引/セッション/BAN)')
     .addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true)))
+  .addSubcommand(s => s.setName('history').setDescription('ユーザーの全取引履歴 (入金/出金/BET/WIN/補助) を時系列で表示')
+    .addUserOption(o => o.setName('user').setDescription('対象ユーザー').setRequired(true))
+    .addStringOption(o => o.setName('type').setDescription('種類').setRequired(false)
+      .addChoices(
+        { name: 'All (全部)', value: 'all' },
+        { name: 'Bets (BET のみ)', value: 'bets' },
+        { name: 'Wins (WIN のみ)', value: 'wins' },
+        { name: 'Deposits (入金)', value: 'deposits' },
+        { name: 'Withdrawals (出金)', value: 'withdrawals' },
+        { name: 'Grants (運営付与)', value: 'grants' },
+      ))
+    .addIntegerOption(o => o.setName('limit').setDescription('最大件数 (default 20)').setRequired(false).setMinValue(1).setMaxValue(50)))
   .addSubcommand(s => s.setName('pending').setDescription('保留中/直近の出金一覧 (ボタンで承認・却下)')
     .addStringOption(o => o.setName('method').setDescription('method 絞り込み').setRequired(false)
       .addChoices({ name: 'PayPay', value: 'paypay' }, { name: 'LTC', value: 'ltc' }))

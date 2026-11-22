@@ -428,6 +428,31 @@ function maskPhone(p: string | null): string {
 
 /* ────────────── ADMIN ────────────── */
 
+/** ledger の reason を人間向けに整形: 'bet:blackjack' → 'BET Blackjack' など */
+function formatReason(reason: string): string {
+  const [head, ...rest] = reason.split(':');
+  const tail = rest.join(':');
+  const gameLabel: Record<string, string> = {
+    blackjack: 'Blackjack', slots: 'Slots', roulette: 'Roulette',
+    baccarat: 'Baccarat', videopoker: 'Video Poker', craps: 'Craps',
+  };
+  switch (head) {
+    case 'bet':    return `BET ${gameLabel[tail] ?? tail}`;
+    case 'win':    return `WIN ${gameLabel[tail] ?? tail}`;
+    case 'deposit':return `DEPOSIT ${tail.toUpperCase()}`;
+    case 'withdraw': return `WITHDRAW ${tail.toUpperCase()}`;
+    case 'admin':  return `ADMIN ${tail}`;
+    case 'grant':  return `GRANT ${tail.replace(':',' ')}`;
+    case 'revoke': return `REVOKE ${tail.replace(':',' ')}`;
+    case 'refund': return `REFUND ${tail}`;
+    default: return reason;
+  }
+}
+function formatLedgerLine(delta: number, reason: string, ref: string | null): string {
+  const sign = delta >= 0 ? '+' : '';
+  return `\`${sign}¥${delta.toLocaleString()}\` ${formatReason(reason)}${ref ? ` \`(${ref.slice(0,16)})\`` : ''}`;
+}
+
 async function cmdAdmin(i: ChatInputCommandInteraction) {
   const sub = i.options.getSubcommand();
   if (sub === 'balance') {
@@ -503,6 +528,63 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
     const embed = new EmbedBuilder().setTitle(`📜 <@${u.id}> のTX`).setDescription(list).setFooter({ text: `現残高 ${bal.toLocaleString()}` });
     return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
+  if (sub === 'history') {
+    const u = i.options.getUser('user', true);
+    const type = (i.options.getString('type') ?? 'all') as 'all'|'bets'|'wins'|'deposits'|'withdrawals'|'grants';
+    const limit = i.options.getInteger('limit') ?? 20;
+    ensureUser(u.id);
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+
+    type Row = { at: number; kind: string; delta: number; label: string; ref: string };
+    const rows: Row[] = [];
+
+    if (type === 'all' || type === 'bets') {
+      const r = db.prepare(`SELECT delta, reason, ref, created_at FROM ledger WHERE discord_id=? AND reason LIKE 'bet:%' ORDER BY id DESC LIMIT ?`).all(u.id, limit) as any[];
+      for (const t of r) rows.push({ at: t.created_at, kind: 'BET', delta: t.delta, label: formatReason(t.reason), ref: t.ref ?? '' });
+    }
+    if (type === 'all' || type === 'wins') {
+      const r = db.prepare(`SELECT delta, reason, ref, created_at FROM ledger WHERE discord_id=? AND reason LIKE 'win:%' ORDER BY id DESC LIMIT ?`).all(u.id, limit) as any[];
+      for (const t of r) rows.push({ at: t.created_at, kind: 'WIN', delta: t.delta, label: formatReason(t.reason), ref: t.ref ?? '' });
+    }
+    if (type === 'all' || type === 'deposits') {
+      const r = db.prepare(`SELECT method, amount_jpy, tx_ref, status, created_at FROM deposits WHERE discord_id=? ORDER BY created_at DESC LIMIT ?`).all(u.id, limit) as any[];
+      for (const d of r) rows.push({
+        at: d.created_at, kind: 'DEPOSIT',
+        delta: d.status === 'confirmed' ? d.amount_jpy : 0,
+        label: `${d.method.toUpperCase()} (${d.status})`, ref: d.tx_ref ?? '',
+      });
+    }
+    if (type === 'all' || type === 'withdrawals') {
+      const r = db.prepare(`SELECT id, method, amount_jpy, dest, tx_ref, link_url, status, reason, created_at FROM withdrawals WHERE discord_id=? ORDER BY created_at DESC LIMIT ?`).all(u.id, limit) as any[];
+      for (const w of r) rows.push({
+        at: w.created_at, kind: 'WITHDRAW',
+        delta: w.status === 'sent' ? -w.amount_jpy : 0,
+        label: `${w.method.toUpperCase()} #${w.id} (${w.status})${w.dest?` → ${(''+w.dest).slice(0,14)}…`:''}${w.reason?` [${w.reason}]`:''}`,
+        ref: w.tx_ref ?? '',
+      });
+    }
+    if (type === 'all' || type === 'grants') {
+      const r = db.prepare(`SELECT delta, reason, ref, created_at FROM ledger WHERE discord_id=? AND (reason LIKE 'admin:%' OR reason LIKE 'grant:%' OR reason LIKE 'revoke:%' OR reason LIKE 'refund%') ORDER BY id DESC LIMIT ?`).all(u.id, limit) as any[];
+      for (const t of r) rows.push({ at: t.created_at, kind: 'ADMIN', delta: t.delta, label: formatReason(t.reason), ref: t.ref ?? '' });
+    }
+
+    rows.sort((a, b) => b.at - a.at);
+    const shown = rows.slice(0, limit);
+
+    const lines = shown.map(r => {
+      const sign = r.delta === 0 ? '  ' : r.delta > 0 ? '+ ' : '− ';
+      const amt  = r.delta === 0 ? '      ' : Math.abs(r.delta).toLocaleString().padStart(7);
+      return `\`<t:${r.at}:f>\` **${r.kind.padEnd(8)}** \`${sign}¥${amt}\` ${r.label}${r.ref?` \`(${r.ref.slice(0,16)})\``:''}`;
+    });
+
+    const embed = new EmbedBuilder()
+      .setTitle(`履歴 — <@${u.id}>  ${type === 'all' ? '' : `(${type})`}`)
+      .setColor(0xd4af37)
+      .setDescription(lines.length ? lines.join('\n').slice(0, 4000) : '_(該当なし)_')
+      .setFooter({ text: `件数: ${shown.length} / 要求: ${limit} · 種類で絞る: type:bets|wins|deposits|withdrawals|grants` });
+    return i.editReply({ embeds: [embed] });
+  }
+
   if (sub === 'user') {
     const u = i.options.getUser('user', true);
     ensureUser(u.id);
@@ -515,8 +597,8 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
     const wdSent = db.prepare(`SELECT method, COALESCE(SUM(amount_jpy),0) s FROM withdrawals WHERE discord_id=? AND status='sent' GROUP BY method`).all(u.id) as Array<{method:string;s:number}>;
     const ban = db.prepare('SELECT reason, banned_at FROM user_bans WHERE discord_id=?').get(u.id) as { reason:string; banned_at:number } | undefined;
 
-    const lastTx = db.prepare(`SELECT delta, reason, ref, created_at FROM ledger WHERE discord_id=? ORDER BY id DESC LIMIT 5`).all(u.id) as Array<{delta:number;reason:string;ref:string|null;created_at:number}>;
-    const openWd = db.prepare(`SELECT id, method, amount_jpy, status, created_at FROM withdrawals WHERE discord_id=? AND status IN ('pending','sent') ORDER BY created_at DESC LIMIT 5`).all(u.id) as any[];
+    const lastTx = db.prepare(`SELECT delta, reason, ref, created_at FROM ledger WHERE discord_id=? ORDER BY id DESC LIMIT 10`).all(u.id) as Array<{delta:number;reason:string;ref:string|null;created_at:number}>;
+    const openWd = db.prepare(`SELECT id, method, amount_jpy, status, created_at FROM withdrawals WHERE discord_id=? AND status IN ('pending','sent','failed') ORDER BY created_at DESC LIMIT 10`).all(u.id) as any[];
     const activeSessions = sessions.listByUser(u.id);
 
     const sum = (rows: Array<{method:string;s:number}>, m: string) => rows.find(x => x.method === m)?.s ?? 0;
@@ -539,14 +621,17 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
         { name: '稼働セッション', value: activeSessions.length
           ? activeSessions.map(s => `${s.game} / bet ${s.bet.toLocaleString()}${s.mix?` (PP${s.mix.pp.toLocaleString()}+LTC${s.mix.ltc.toLocaleString()})`:''} / sid \`${s.id.slice(0,8)}\``).join('\n')
           : '_(なし)_', inline: false },
-        { name: '直近出金', value: openWd.length
-          ? openWd.map(w => `#${w.id} ${w.status==='pending'?'🟡':'🟢'} ${w.method} ¥${w.amount_jpy.toLocaleString()} <t:${w.created_at}:R>`).join('\n')
+        { name: '直近出金 (10件)', value: openWd.length
+          ? openWd.map(w => {
+              const m = w.status==='pending'?'🟡':w.status==='sent'?'🟢':'🔴';
+              return `#${w.id} ${m} \`<t:${w.created_at}:f>\` ${w.method} ¥${w.amount_jpy.toLocaleString()}`;
+            }).join('\n').slice(0, 1024)
           : '_(なし)_', inline: false },
-        { name: '直近取引 (ledger)', value: lastTx.length
-          ? lastTx.map(t => `\`<t:${t.created_at}:t>\` ${t.delta>=0?'+':''}${t.delta.toLocaleString()} — ${t.reason}${t.ref?` (${t.ref})`:''}`).join('\n')
+        { name: '直近取引 10 件 (ledger)', value: lastTx.length
+          ? lastTx.map(t => `\`<t:${t.created_at}:f>\` ${formatLedgerLine(t.delta, t.reason, t.ref)}`).join('\n').slice(0, 1024)
           : '_(なし)_', inline: false },
       )
-      .setFooter({ text: '/admin grant で chip 付与 · /admin ban / unban で制裁' });
+      .setFooter({ text: '詳細履歴は /admin history user:... · chip 付与は /admin grant · 制裁は /admin ban / unban' });
 
     return i.editReply({ embeds: [...payload.embeds, embed], files: payload.files });
   }
