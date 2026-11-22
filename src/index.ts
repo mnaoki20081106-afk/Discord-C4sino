@@ -5,7 +5,7 @@ import {
   EmbedBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteraction,
   ButtonInteraction, ModalSubmitInteraction, StringSelectMenuInteraction, MessageFlags,
 } from 'discord.js';
-import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned } from './db/schema.js';
+import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
 import * as sessions from './games/session-store.js';
 import { startHand, availableActions, apply, newShoe, isBlackjack, handTotal, type BJState } from './games/blackjack.js';
 import { spin, spinWithCap, reelStrip } from './games/slots.js';
@@ -19,7 +19,7 @@ import { renderRoulette } from './ui/render-roulette.js';
 import { renderBaccarat } from './ui/render-baccarat.js';
 import { renderVideoPoker } from './ui/render-videopoker.js';
 import { renderCraps } from './ui/render-craps.js';
-import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow } from './ui/panels.js';
+import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow, balanceEmbed, railGauge } from './ui/panels.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
@@ -201,8 +201,8 @@ async function cmdSetup(i: ChatInputCommandInteraction) {
 }
 
 async function cmdBalance(i: ChatInputCommandInteraction) {
-  const bal = getBalance(i.user.id);
-  await i.reply({ content: `💰 残高: **${bal.toLocaleString()} ${L('chips')}**`, flags: MessageFlags.Ephemeral });
+  const r = getReserves(i.user.id);
+  await i.reply({ embeds: [balanceEmbed(r.pp, r.ltc)], flags: MessageFlags.Ephemeral });
 }
 
 /* ────────────── WALLET ADMIN ────────────── */
@@ -427,8 +427,8 @@ async function onButton(i: ButtonInteraction) {
   if (ns === 'adm') return onAdminButton(i, kind);
   if (ns === 'wd' && (kind === 'approve' || kind === 'reject')) return onWithdrawAdmin(i, kind, arg);
   if (ns === 'bal') {
-    const bal = getBalance(i.user.id);
-    return i.reply({ content: `💰 残高: **${bal.toLocaleString()} ${L('chips')}**`, flags: MessageFlags.Ephemeral });
+    const r = getReserves(i.user.id);
+    return i.reply({ embeds: [balanceEmbed(r.pp, r.ltc)], flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -1331,7 +1331,7 @@ async function processPaypayDeposit(discordId: string, linkInput: string, passco
   const stmt = db.prepare(`INSERT INTO deposits(discord_id, method, amount_jpy, amount_raw, tx_ref, status, confirmed_at)
     VALUES (?, 'paypay', ?, ?, ?, 'confirmed', strftime('%s','now'))`);
   stmt.run(discordId, r.amount, String(r.amount), code);
-  txCredit(discordId, r.amount, 'deposit:paypay', code);
+  creditRail(discordId, 'pp', r.amount, 'deposit:paypay', code);
   invalidateLiquidityCache();
   return { amount: r.amount, wallet: w.label };
 }
@@ -1518,7 +1518,7 @@ async function ltcPoll() {
         db.prepare(`INSERT INTO deposits(discord_id, method, amount_jpy, amount_raw, tx_ref, status, confirmed_at)
           VALUES (?, 'ltc', ?, ?, ?, 'confirmed', strftime('%s','now'))`)
           .run(row.discord_id, jpy, String(tx.value_ltc), tx.txid);
-        txCredit(row.discord_id, jpy, 'deposit:ltc', tx.txid);
+        creditRail(row.discord_id, 'ltc', jpy, 'deposit:ltc', tx.txid);
         invalidateLiquidityCache();
         const user = await client.users.fetch(row.discord_id).catch(() => null);
         await user?.send(`✅ LTC ${tx.value_ltc} (≈ ¥${jpy.toLocaleString()}) を受信。残高に加算しました。`).catch(() => {});

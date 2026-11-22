@@ -1,5 +1,5 @@
 import { Client, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
-import { db, txCredit, getBalance } from '../db/schema.js';
+import { db, txCredit, getBalance, getReserves, debitRail, creditRail } from '../db/schema.js';
 import * as pp from './paypay-client.js';
 import * as wallets from './wallets.js';
 import { ltcJpyRate, sendLtc, addressBalanceLtc } from './ltc.js';
@@ -17,6 +17,16 @@ function hasEnoughChips(discordId: string, amount: number): boolean {
   return getBalance(discordId) >= amount;
 }
 
+function assertRailAvailable(discordId: string, rail: 'pp'|'ltc', amount: number) {
+  const r = getReserves(discordId);
+  const have = rail === 'pp' ? r.pp : r.ltc;
+  if (have < amount) {
+    const label = rail === 'pp' ? 'PayPay 由来 chip' : 'LTC 由来 chip';
+    throw new Error(`${label} が不足しています (保有 ¥${have.toLocaleString()} / 必要 ¥${amount.toLocaleString()})。\n` +
+      `内部レートで保全されているため、入金したレール分しか出金できません。`);
+  }
+}
+
 /**
  * PayPay 出金: 選ばれたウォレットから送金リンクを生成し、ユーザーに DM。
  * chip は link 生成成功時に即焼却 (link は PayPay 側で 7日有効なので十分)。
@@ -24,6 +34,7 @@ function hasEnoughChips(discordId: string, amount: number): boolean {
 export async function withdrawPayPay(client: Client, r: WithdrawReq): Promise<{ id: number; link: string; passcode?: string }> {
   if (r.amountJpy < MIN_WITHDRAW_JPY.paypay) throw new Error(`最低出金額は ¥${MIN_WITHDRAW_JPY.paypay.toLocaleString()} です`);
   if (!hasEnoughChips(r.discordId, r.amountJpy)) throw new Error('chip 残高が不足しています');
+  assertRailAvailable(r.discordId, 'pp', r.amountJpy);
 
   // 残高十分な PayPay ウォレットを 1 つ選ぶ (usable_balance で絞る)
   const candidates = wallets.listWallets('paypay').filter(w => w.enabled && (w.balance_cached ?? 0) >= r.amountJpy);
@@ -37,7 +48,7 @@ export async function withdrawPayPay(client: Client, r: WithdrawReq): Promise<{ 
   const id = info.lastInsertRowid as number;
 
   try {
-    txCredit(r.discordId, -r.amountJpy, 'withdraw:paypay', String(id));
+    debitRail(r.discordId, 'pp', r.amountJpy, 'withdraw:paypay', String(id));
   } catch (e) {
     db.prepare('UPDATE withdrawals SET status="failed", reason=? WHERE id=?').run(`chip deduct failed: ${(e as Error).message}`, id);
     throw e;
@@ -47,8 +58,8 @@ export async function withdrawPayPay(client: Client, r: WithdrawReq): Promise<{ 
   try {
     link = await wallets.withPaypay(w, t => pp.createLink(t, r.amountJpy, r.passcode));
   } catch (e) {
-    // 失敗: chip を払い戻し
-    txCredit(r.discordId, r.amountJpy, 'withdraw:paypay:refund', String(id));
+    // 失敗: chip を払い戻し (元のレールに戻す)
+    creditRail(r.discordId, 'pp', r.amountJpy, 'withdraw:paypay:refund', String(id));
     db.prepare('UPDATE withdrawals SET status="failed", reason=? WHERE id=?').run((e as Error).message, id);
     throw e;
   }
@@ -91,6 +102,7 @@ export async function withdrawLtc(client: Client, adminChannelId: string | null,
   if (!r.dest) throw new Error('LTC アドレスが未指定');
   if (!/^[A-HJ-NP-Za-km-z1-9]{25,100}$|^ltc1[0-9a-z]{25,100}$/.test(r.dest)) throw new Error('LTC アドレスの形式が不正');
   if (!hasEnoughChips(r.discordId, r.amountJpy)) throw new Error('chip 残高が不足しています');
+  assertRailAvailable(r.discordId, 'ltc', r.amountJpy);
 
   const rate = await ltcJpyRate();
   const netJpy = Math.max(0, r.amountJpy - LTC_NETWORK_FEE_JPY);
@@ -102,7 +114,7 @@ export async function withdrawLtc(client: Client, adminChannelId: string | null,
   const info = stmt.run(r.discordId, r.amountJpy, LTC_NETWORK_FEE_JPY, netJpy, r.dest);
   const id = info.lastInsertRowid as number;
   try {
-    txCredit(r.discordId, -r.amountJpy, 'withdraw:ltc', String(id));
+    debitRail(r.discordId, 'ltc', r.amountJpy, 'withdraw:ltc', String(id));
   } catch (e) {
     db.prepare('UPDATE withdrawals SET status="failed", reason=? WHERE id=?').run(`chip deduct failed: ${(e as Error).message}`, id);
     throw e;
@@ -188,7 +200,9 @@ export function markLtcSent(id: number, txid: string) {
 export function rejectWithdrawal(id: number, reason: string): any {
   const w = db.prepare('SELECT * FROM withdrawals WHERE id=? AND status="pending"').get(id) as any;
   if (!w) throw new Error('withdrawal not found or already processed');
-  txCredit(w.discord_id, w.amount_jpy, 'withdraw:refund', String(id));
+  // 元のレールに戻して不変式を維持
+  const rail: 'pp'|'ltc' = w.method === 'paypay' ? 'pp' : 'ltc';
+  creditRail(w.discord_id, rail, w.amount_jpy, 'withdraw:refund', String(id));
   db.prepare('UPDATE withdrawals SET status="failed", reason=?, completed_at=strftime("%s","now") WHERE id=?')
     .run(reason, id);
   return w;
