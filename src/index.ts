@@ -73,6 +73,15 @@ client.once(Events.ClientReady, async c => {
   } catch (e) {
     console.error('[crypto] migration failed:', (e as Error).message);
   }
+  // active のまま残っていたセッションを abandoned に遷移 + BET を refund (比率不明時は PP に寄せる)
+  try {
+    sessions.recoverActiveSessions((discordId, amount, reason, ref) => {
+      // mix 情報は DB から復元できる (session.mix)。ここでは txCredit で現比率に按分で戻す。
+      txCredit(discordId, amount, reason, ref);
+    });
+  } catch (e) {
+    console.error('[sessions] recover failed:', (e as Error).message);
+  }
   // Webhook rewrite 方式に切り替えたため、旧 AutoMod ブロックルールが残っていたら削除する
   try { await removeAutoModInAllGuilds(c as unknown as { guilds: { cache: Map<string, any> } }); }
   catch (e) { console.error('[automod] cleanup failed:', (e as Error).message); }
@@ -1043,6 +1052,7 @@ async function startBJ(i: ButtonInteraction | ModalSubmitInteraction, bet: numbe
 }
 
 async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
+  sessions.save(sid);
   if (st.phase === 'done') await applyBJClamp(st);
   const buf = await renderBlackjack({
     player: st.player, active: st.active, dealer: st.dealer,
@@ -1161,6 +1171,7 @@ async function onGameSettled(i: ButtonInteraction | ModalSubmitInteraction, game
 }
 
 async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState) {
+  sessions.save(sid);
   if (st.phase === 'done') await applyBJClamp(st);
   const buf = await renderBlackjack({
     player: st.player, active: st.active, dealer: st.dealer,
@@ -1446,6 +1457,7 @@ function buildCrapsEmbed(sid: string, st: CrapsState, balance: number): EmbedBui
 }
 
 async function sendCrapsEphemeral(i: ButtonInteraction, sid: string, st: CrapsState) {
+  sessions.save(sid);
   const buf = await renderCraps({ state: st });
   const file = new AttachmentBuilder(buf, { name: 'craps.png' });
   const embed = buildCrapsEmbed(sid, st, getBalance(i.user.id)).setImage('attachment://craps.png');
@@ -1454,6 +1466,7 @@ async function sendCrapsEphemeral(i: ButtonInteraction, sid: string, st: CrapsSt
 }
 
 async function updateCrapsMessage(i: ButtonInteraction, sid: string, st: CrapsState) {
+  sessions.save(sid);
   const buf = await renderCraps({ state: st });
   const file = new AttachmentBuilder(buf, { name: 'craps.png' });
   const embed = buildCrapsEmbed(sid, st, getBalance(i.user.id)).setImage('attachment://craps.png');
@@ -1691,6 +1704,7 @@ function buildVpEmbed(sid: string, bet: number, balance: number, st: VPHand): Em
 }
 
 async function sendVpEphemeral(i: ButtonInteraction, sid: string, bet: number, st: VPHand) {
+  sessions.save(sid);
   const buf = await renderVideoPoker({ cards: st.cards, held: st.held, phase: st.phase });
   const file = new AttachmentBuilder(buf, { name: 'vp.png' });
   const embed = buildVpEmbed(sid, bet, getBalance(i.user.id), st).setImage('attachment://vp.png');
@@ -1699,6 +1713,7 @@ async function sendVpEphemeral(i: ButtonInteraction, sid: string, bet: number, s
 }
 
 async function updateVpMessage(i: ButtonInteraction, sid: string, bet: number, st: VPHand) {
+  sessions.save(sid);
   const buf = await renderVideoPoker({ cards: st.cards, held: st.held, phase: st.phase });
   const file = new AttachmentBuilder(buf, { name: 'vp.png' });
   const embed = buildVpEmbed(sid, bet, getBalance(i.user.id), st).setImage('attachment://vp.png');
