@@ -69,6 +69,23 @@ export function touchUsed(id: number, balance?: number) {
     .run(balance ?? null, id);
 }
 
+/**
+ * 残高キャッシュを delta ぶん即時調整する。外部システム (PayPay API / BlockCypher) の
+ * 反映を待たずにローカル帳簿で正確な残高を保つ。入金/出金/運営引き出しのすべてで呼ぶこと。
+ */
+export function adjustCached(id: number, deltaJpy: number): number {
+  const row = db.prepare('UPDATE wallets SET balance_cached = MAX(0, COALESCE(balance_cached,0) + ?), last_used_at = strftime("%s","now") WHERE id=? RETURNING balance_cached')
+    .get(deltaJpy, id) as { balance_cached: number } | undefined;
+  return row?.balance_cached ?? 0;
+}
+
+/**
+ * 外部 API から取得した真の残高で cache を上書き。定期 refresh 時に使う。
+ */
+export function setCached(id: number, balance: number) {
+  db.prepare('UPDATE wallets SET balance_cached=?, last_used_at=strftime("%s","now") WHERE id=?').run(balance, id);
+}
+
 export function updateTokens(id: number, access: string, refresh: string) {
   db.prepare('UPDATE wallets SET access_token=?, refresh_token=? WHERE id=?').run(access, refresh, id);
 }

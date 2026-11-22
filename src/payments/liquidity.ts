@@ -36,7 +36,11 @@ function totalCrapsExposure(exceptSessionId?: string): number {
   return s;
 }
 
-/** 全ウォレットの流動性 (JPY)。PayPay はキャッシュ値、LTC は BlockCypher 残高×レート。 */
+/**
+ * 全ウォレットの流動性 (JPY)。ローカル `balance_cached` を唯一の真実とする。
+ * 外部システム (PayPay API / BlockCypher) の反映遅延に依らず、入出金の都度 adjustCached で
+ * 更新されているローカル帳簿を参照する。opts.refresh=true の時だけ外部と同期する。
+ */
 export async function totalLiquidityJpy(opts?: { refresh?: boolean }): Promise<{
   total: number;
   paypay: number;
@@ -51,32 +55,62 @@ export async function totalLiquidityJpy(opts?: { refresh?: boolean }): Promise<{
 
   for (const w of ws) {
     if (w.kind === 'paypay') {
-      let jpy = w.balance_cached ?? 0;
       if (opts?.refresh && w.access_token) {
         try {
           const b = await wallets.withPaypay(w, t => pp.walletBalance(t));
-          jpy = b.usable_balance;
-          wallets.touchUsed(w.id, jpy);
+          wallets.setCached(w.id, b.usable_balance);
         } catch (e) {
           console.warn(`[liquidity] paypay #${w.id}:`, (e as Error).message);
         }
       }
+      // refresh 済みなら再読込、それ以外は手元の cache をそのまま使う
+      const jpy = (wallets.getWallet(w.id)?.balance_cached) ?? 0;
       paypayTotal += jpy;
       details.push({ id: w.id, kind: 'paypay', label: w.label, jpy });
     } else if (w.kind === 'ltc' && w.address && ltcRate) {
-      let jpy = 0;
-      try {
-        const ltc = await addressBalanceLtc(w.address);
-        jpy = Math.floor(ltc * ltcRate);
-      } catch (e) {
-        console.warn(`[liquidity] ltc #${w.id}:`, (e as Error).message);
+      if (opts?.refresh) {
+        try {
+          const ltc = await addressBalanceLtc(w.address);
+          wallets.setCached(w.id, Math.floor(ltc * ltcRate));
+        } catch (e) {
+          console.warn(`[liquidity] ltc #${w.id}:`, (e as Error).message);
+        }
       }
+      const jpy = (wallets.getWallet(w.id)?.balance_cached) ?? 0;
       ltcTotal += jpy;
       details.push({ id: w.id, kind: 'ltc', label: w.label, jpy });
     }
   }
 
   return { total: paypayTotal + ltcTotal, paypay: paypayTotal, ltc: ltcTotal, details };
+}
+
+/**
+ * 運営利益引き出し前の solvency 検査。今の cache + 希望引き出し額を引いても
+ * 流通チップ総額を下回らないことを保証する。
+ * @returns 引き出し可能なら null、不可なら理由文字列
+ */
+export async function assertOperatorWithdrawSafe(amountJpy: number, kind: 'paypay'|'ltc'): Promise<string | null> {
+  const liq = await cachedLiquidity();
+  const outstanding = (db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get() as any).s as number;
+  const effectiveAfter = liq.total - outstanding - amountJpy;
+  if (effectiveAfter < 0) {
+    return `引き出すと ¥${(-effectiveAfter).toLocaleString()} 分、流通チップに対して不足します ` +
+      `(流動性 ¥${liq.total.toLocaleString()} − 流通チップ ¥${outstanding.toLocaleString()} − 引き出し ¥${amountJpy.toLocaleString()})`;
+  }
+  // kind 別の個別チェックも: LTC だけ引き出して LTC 由来のチップが残らないようにする
+  const reservesByRail = db.prepare(
+    kind === 'paypay'
+      ? 'SELECT COALESCE(SUM(pp_reserve),0) s FROM users'
+      : 'SELECT COALESCE(SUM(ltc_reserve),0) s FROM users'
+  ).get() as { s: number };
+  const walletRailJpy = kind === 'paypay' ? liq.paypay : liq.ltc;
+  if (walletRailJpy - amountJpy < reservesByRail.s) {
+    const deficit = reservesByRail.s - (walletRailJpy - amountJpy);
+    return `${kind.toUpperCase()} 側で ¥${deficit.toLocaleString()} 分不足します ` +
+      `(${kind.toUpperCase()} 残高 ¥${walletRailJpy.toLocaleString()} − 引き出し ¥${amountJpy.toLocaleString()} < ${kind.toUpperCase()} 由来チップ ¥${reservesByRail.s.toLocaleString()})`;
+  }
+  return null;
 }
 
 /** 流動性キャッシュ (30秒) — 高頻度ベット時に外部APIを叩きすぎない。 */

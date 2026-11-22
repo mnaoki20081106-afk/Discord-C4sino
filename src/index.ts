@@ -24,7 +24,7 @@ import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccar
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
-import { housePayoutCap, clampPayout, setCrapsExposure, clearCrapsExposure, invalidateLiquidityCache, maxAffordableBet } from './payments/liquidity.js';
+import { housePayoutCap, clampPayout, setCrapsExposure, clearCrapsExposure, invalidateLiquidityCache, maxAffordableBet, assertOperatorWithdrawSafe } from './payments/liquidity.js';
 import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY } from './payments/limits.js';
 import * as withdraw from './payments/withdraw.js';
 import { L } from './ui/leet.js';
@@ -304,6 +304,10 @@ async function cmdPaypay(i: ChatInputCommandInteraction) {
       if (!w) return i.editReply(`❌ ¥${amount.toLocaleString()} を送れるウォレットがありません (残高キャッシュ未更新の可能性: /paypay balance で更新)`);
     }
 
+    // Solvency ガード: 引き出し後も流通チップを払えるか検査
+    const bad = await assertOperatorWithdrawSafe(amount, 'paypay');
+    if (bad) return i.editReply(`❌ 引き出し拒否: ${bad}`);
+
     const row = db.prepare(`INSERT INTO operator_payouts(admin_id, wallet_id, amount_jpy, passcode, status)
       VALUES (?, ?, ?, ?, 'pending')`).run(i.user.id, w.id, amount, passcode ?? null);
     const opId = row.lastInsertRowid as number;
@@ -319,8 +323,7 @@ async function cmdPaypay(i: ChatInputCommandInteraction) {
 
     db.prepare(`UPDATE operator_payouts SET status='sent', link_url=?, order_id=?, completed_at=strftime('%s','now') WHERE id=?`)
       .run(link.link, link.order_id, opId);
-    const newBal = Math.max(0, (w.balance_cached ?? 0) - amount);
-    wallets.touchUsed(w.id, newBal);
+    wallets.adjustCached(w.id, -amount);
     invalidateLiquidityCache();
 
     const embed = new EmbedBuilder()
@@ -500,6 +503,169 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
     const embed = new EmbedBuilder().setTitle(`📜 <@${u.id}> のTX`).setDescription(list).setFooter({ text: `現残高 ${bal.toLocaleString()}` });
     return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
+  if (sub === 'pending') {
+    const methodFilter = i.options.getString('method') as 'paypay'|'ltc'|null;
+    const limit = Math.min(25, Math.max(1, i.options.getInteger('limit') ?? 10));
+    const where = methodFilter
+      ? `WHERE status IN ('pending','sent','failed') AND method=?`
+      : `WHERE status IN ('pending','sent','failed')`;
+    const rows = db.prepare(`SELECT * FROM withdrawals ${where} ORDER BY created_at DESC LIMIT ?`)
+      .all(...(methodFilter ? [methodFilter, limit] : [limit])) as any[];
+    if (!rows.length) return i.reply({ content: '該当する出金はありません', flags: MessageFlags.Ephemeral });
+
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    const lines: string[] = [];
+    for (const w of rows) {
+      const ago = `<t:${w.created_at}:R>`;
+      const marker = w.status === 'pending' ? '🟡' : w.status === 'sent' ? '🟢' : '🔴';
+      const summary = w.method === 'paypay'
+        ? `**#${w.id}** ${marker} PayPay ¥${w.amount_jpy.toLocaleString()} → <@${w.discord_id}>  ${ago}` +
+          (w.link_url ? `\n     link: ${w.link_url}` : '') +
+          (w.passcode ? ` (passcode \`${w.passcode}\`)` : '') +
+          (w.reason ? `\n     reason: ${w.reason}` : '')
+        : `**#${w.id}** ${marker} LTC ¥${w.amount_jpy.toLocaleString()} → <@${w.discord_id}>  ${ago}` +
+          `\n     dest: \`${w.dest}\`` +
+          (w.tx_ref ? `\n     txid: \`${w.tx_ref}\`` : '') +
+          (w.reason ? `\n     reason: ${w.reason}` : '');
+      lines.push(summary);
+    }
+    const embed = new EmbedBuilder()
+      .setTitle('保留中/直近の出金')
+      .setColor(0xd4af37)
+      .setDescription(lines.join('\n\n').slice(0, 4000))
+      .setFooter({ text: 'pending (🟡) の LTC は /admin resolve-withdraw で手動承認/却下' });
+    // 最初の pending LTC があればそれ用のボタン行を 1 つ付ける
+    const firstPendingLtc = rows.find(w => w.status === 'pending' && w.method === 'ltc') as any;
+    const components: ActionRowBuilder<ButtonBuilder>[] = [];
+    if (firstPendingLtc) {
+      components.push(new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder().setCustomId(`wd:approve:${firstPendingLtc.id}`).setLabel(`LTC #${firstPendingLtc.id} 承認`).setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`wd:reject:${firstPendingLtc.id}`).setLabel(`LTC #${firstPendingLtc.id} 却下 (返金)`).setStyle(ButtonStyle.Danger),
+      ));
+    }
+    return i.editReply({ embeds: [embed], components });
+  }
+
+  if (sub === 'grant') {
+    const u = i.options.getUser('user', true);
+    const rail = i.options.getString('rail', true) as 'pp'|'ltc';
+    const amount = i.options.getInteger('amount', true);
+    const reason = i.options.getString('reason') ?? 'admin-grant';
+    ensureUser(u.id);
+    try {
+      if (amount > 0) {
+        creditRail(u.id, rail, amount, `grant:${rail}:${reason}`, i.user.id);
+      } else if (amount < 0) {
+        const { debitRail } = await import('./db/schema.js');
+        debitRail(u.id, rail, -amount, `revoke:${rail}:${reason}`, i.user.id);
+      } else return i.reply({ content: '金額が 0 です', flags: MessageFlags.Ephemeral });
+    } catch (e: any) {
+      return i.reply({ content: `❌ ${e.message}`, flags: MessageFlags.Ephemeral });
+    }
+    const r = getReserves(u.id);
+    return i.reply({
+      content: `✅ <@${u.id}> に ${rail.toUpperCase()} 由来 ${amount>=0?'+':''}¥${amount.toLocaleString()} を適用\n` +
+               `内訳: PP ¥${r.pp.toLocaleString()} / LTC ¥${r.ltc.toLocaleString()} / 合計 ¥${r.total.toLocaleString()}`,
+      flags: MessageFlags.Ephemeral,
+    });
+  }
+
+  if (sub === 'send-paypay') {
+    const u = i.options.getUser('user', true);
+    const amount = i.options.getInteger('amount', true);
+    const passcode = i.options.getString('passcode')?.trim() || undefined;
+    const reason = i.options.getString('reason') ?? 'admin-send';
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    const bad = await assertOperatorWithdrawSafe(amount, 'paypay');
+    if (bad) return i.editReply(`❌ 送金拒否: ${bad}`);
+    const candidates = wallets.listWallets('paypay')
+      .filter(x => x.enabled && x.access_token && (x.balance_cached ?? 0) >= amount)
+      .sort((a, b) => (b.balance_cached ?? 0) - (a.balance_cached ?? 0));
+    const w = candidates[0];
+    if (!w) return i.editReply(`❌ ¥${amount.toLocaleString()} を送れる PayPay ウォレットがありません`);
+    const opRow = db.prepare(`INSERT INTO operator_payouts(admin_id, wallet_id, amount_jpy, passcode, status, reason)
+      VALUES (?, ?, ?, ?, 'pending', ?)`).run(i.user.id, w.id, amount, passcode ?? null, `send-paypay:to:${u.id}:${reason}`);
+    const opId = opRow.lastInsertRowid as number;
+    let link;
+    try {
+      link = await wallets.withPaypay(w, t => pp.createLink(t, amount, passcode));
+    } catch (e: any) {
+      db.prepare('UPDATE operator_payouts SET status="failed", reason=?, completed_at=strftime("%s","now") WHERE id=?').run(e.message, opId);
+      return i.editReply(`❌ リンク生成失敗: ${e.message}`);
+    }
+    db.prepare(`UPDATE operator_payouts SET status='sent', link_url=?, order_id=?, completed_at=strftime('%s','now') WHERE id=?`)
+      .run(link.link, link.order_id, opId);
+    wallets.adjustCached(w.id, -amount);
+    invalidateLiquidityCache();
+
+    // ユーザーに DM
+    try {
+      const target = await client.users.fetch(u.id);
+      const embed = new EmbedBuilder()
+        .setTitle(`PayPay 送金リンク — ¥${amount.toLocaleString()}`)
+        .setColor(0x22c55e)
+        .setDescription('運営から送金が届きました。')
+        .addFields(
+          { name: 'Link', value: link.link },
+          ...(passcode ? [{ name: 'Passcode', value: `\`${passcode}\``, inline: true }] : []),
+          { name: 'Reason', value: reason, inline: true },
+        )
+        .setFooter({ text: `Operator payout #${opId}` });
+      await target.send({ embeds: [embed] });
+    } catch (e) {
+      console.warn('[admin send-paypay] DM failed:', (e as Error).message);
+    }
+
+    return i.editReply(`✅ <@${u.id}> に PayPay ¥${amount.toLocaleString()} を送金 (opId #${opId}, wallet #${w.id})`);
+  }
+
+  if (sub === 'send-ltc') {
+    const u = i.options.getUser('user', true);
+    const dest = i.options.getString('dest', true).trim();
+    const ltcAmount = i.options.getNumber('ltc', true);
+    const reason = i.options.getString('reason') ?? 'admin-send';
+    if (!/^[A-HJ-NP-Za-km-z1-9]{25,100}$|^ltc1[0-9a-z]{25,100}$/.test(dest))
+      return i.reply({ content: '❌ LTC アドレスの形式が不正', flags: MessageFlags.Ephemeral });
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+
+    const rate = await (await import('./payments/ltc.js')).ltcJpyRate();
+    const jpy = Math.floor(ltcAmount * rate);
+    const bad = await assertOperatorWithdrawSafe(jpy, 'ltc');
+    if (bad) return i.editReply(`❌ 送金拒否: ${bad}`);
+
+    const { sendLtc } = await import('./payments/ltc.js');
+    const hots = wallets.listLtcHotWallets();
+    let lastErr = 'HOT ウォレットが見つかりません';
+    for (const w of hots) {
+      try {
+        const sent = await sendLtc(w.address!, w.key.priv, dest, ltcAmount);
+        wallets.adjustCached(w.id, -jpy);
+        invalidateLiquidityCache();
+        const opRow = db.prepare(`INSERT INTO operator_payouts(admin_id, wallet_id, amount_jpy, status, link_url, order_id, reason, completed_at)
+          VALUES (?, ?, ?, 'sent', ?, ?, ?, strftime('%s','now'))`)
+          .run(i.user.id, w.id, jpy, dest, sent.txid, `send-ltc:to:${u.id}:${reason}`);
+        try {
+          const target = await client.users.fetch(u.id);
+          const embed = new EmbedBuilder()
+            .setTitle(`LTC 送金完了 — ${ltcAmount} LTC`)
+            .setColor(0x22c55e)
+            .addFields(
+              { name: 'To', value: `\`${dest}\`` },
+              { name: 'Amount', value: `${ltcAmount} LTC (≈ ¥${jpy.toLocaleString()})`, inline: true },
+              { name: 'Reason', value: reason, inline: true },
+              { name: 'txid', value: `\`${sent.txid}\`` },
+            )
+            .setFooter({ text: `Operator payout #${opRow.lastInsertRowid}` });
+          await target.send({ embeds: [embed] });
+        } catch { /* DM 失敗は致命でない */ }
+        return i.editReply(`✅ <@${u.id}> に ${ltcAmount} LTC (≈ ¥${jpy.toLocaleString()}) 送金完了\ntxid: \`${sent.txid}\``);
+      } catch (e: any) {
+        lastErr = e.message;
+      }
+    }
+    return i.editReply(`❌ LTC 送金失敗: ${lastErr}`);
+  }
+
   if (sub === 'automod-sync') {
     if (!i.guild) return i.reply({ content: 'ギルド内で実行してください', flags: MessageFlags.Ephemeral });
     await i.deferReply({ flags: MessageFlags.Ephemeral });
@@ -1488,7 +1654,7 @@ async function processPaypayDeposit(discordId: string, linkInput: string, passco
     throw new Error(`最低入金額は ¥${MIN_DEPOSIT_JPY.paypay.toLocaleString()} です (このリンクは ¥${pre.amount.toLocaleString()})`);
 
   const r = await wallets.withPaypay(w, t => pp.linkReceive(t, code, passcode));
-  wallets.touchUsed(w.id);
+  wallets.adjustCached(w.id, r.amount);        // 運営 PayPay 残高を即時 +r.amount に更新
 
   const stmt = db.prepare(`INSERT INTO deposits(discord_id, method, amount_jpy, amount_raw, tx_ref, status, confirmed_at)
     VALUES (?, 'paypay', ?, ?, ?, 'confirmed', strftime('%s','now'))`);

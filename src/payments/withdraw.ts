@@ -64,9 +64,8 @@ export async function withdrawPayPay(client: Client, r: WithdrawReq): Promise<{ 
     throw e;
   }
 
-  // 残高キャッシュを控えめに下げる
-  const newBal = Math.max(0, (w.balance_cached ?? 0) - r.amountJpy);
-  wallets.touchUsed(w.id, newBal);
+  // 送金額ぶんを即時減算 (次の liquidity 計算で正確に反映される)
+  wallets.adjustCached(w.id, -r.amountJpy);
 
   db.prepare('UPDATE withdrawals SET status="sent", link_url=?, tx_ref=?, completed_at=strftime("%s","now") WHERE id=?')
     .run(link.link, link.order_id, id);
@@ -132,7 +131,7 @@ export async function withdrawLtc(client: Client, adminChannelId: string | null,
       const sent = await sendLtc(w.address, w.key.priv, r.dest, ltcAmount);
       db.prepare('UPDATE withdrawals SET status="sent", wallet_id=?, tx_ref=?, completed_at=strftime("%s","now") WHERE id=?')
         .run(w.id, sent.txid, id);
-      wallets.touchUsed(w.id);
+      wallets.adjustCached(w.id, -r.amountJpy);     // 送金額ぶんを即時減算 (chain lag を待たない)
 
       // ユーザーに DM
       try {
