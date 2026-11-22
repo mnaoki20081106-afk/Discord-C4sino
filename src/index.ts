@@ -19,7 +19,7 @@ import { renderRoulette } from './ui/render-roulette.js';
 import { renderBaccarat } from './ui/render-baccarat.js';
 import { renderVideoPoker } from './ui/render-videopoker.js';
 import { renderCraps } from './ui/render-craps.js';
-import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow, balanceEmbed, railGauge } from './ui/panels.js';
+import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow, balanceReply } from './ui/panels.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
@@ -202,7 +202,8 @@ async function cmdSetup(i: ChatInputCommandInteraction) {
 
 async function cmdBalance(i: ChatInputCommandInteraction) {
   const r = getReserves(i.user.id);
-  await i.reply({ embeds: [balanceEmbed(r.pp, r.ltc)], flags: MessageFlags.Ephemeral });
+  const payload = await balanceReply(r.pp, r.ltc);
+  await i.reply({ ...payload, flags: MessageFlags.Ephemeral });
 }
 
 /* ────────────── WALLET ADMIN ────────────── */
@@ -428,7 +429,8 @@ async function onButton(i: ButtonInteraction) {
   if (ns === 'wd' && (kind === 'approve' || kind === 'reject')) return onWithdrawAdmin(i, kind, arg);
   if (ns === 'bal') {
     const r = getReserves(i.user.id);
-    return i.reply({ embeds: [balanceEmbed(r.pp, r.ltc)], flags: MessageFlags.Ephemeral });
+    const payload = await balanceReply(r.pp, r.ltc);
+    return i.reply({ ...payload, flags: MessageFlags.Ephemeral });
   }
 }
 

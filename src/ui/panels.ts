@@ -1,6 +1,7 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } from 'discord.js';
+import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } from 'discord.js';
 import { L } from './leet.js';
 import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY } from '../payments/limits.js';
+import { renderBalance } from './render-balance.js';
 
 export function blackjackPanel() {
   const embed = new EmbedBuilder()
@@ -216,79 +217,58 @@ export function crapsControlRows(state: { phase: 'comeout'|'point'; point?: numb
 }
 
 /**
- * レール残高ゲージ: 🟥 (PayPay) と 🟦 (LTC) の割合を 11 マスで描画。
- * 残高 0 の場合は空のゲージ (⬜11個) を返す。
+ * 残高カード (画像 embed)。/balance と Cashier パネルの残高確認で使用。
+ * 返り値をそのまま interaction.reply に展開できる形で返す。
  */
-export function railGauge(pp: number, ltc: number, slots = 11): string {
-  const total = pp + ltc;
-  if (total <= 0) return '⬜'.repeat(slots);
-  // 最低 1 マスずつ保証 (どちらかが 0 の場合は 0 マス)
-  let ppSlots = Math.round(slots * pp / total);
-  if (pp > 0 && ppSlots === 0) ppSlots = 1;
-  if (ltc > 0 && ppSlots === slots) ppSlots = slots - 1;
-  const ltcSlots = slots - ppSlots;
-  return '🟥'.repeat(ppSlots) + '🟦'.repeat(ltcSlots);
-}
-
-/** ユーザー向けの残高カードを作る (ゲージ + 内訳)。/balance と cashier パネル両方で使う */
-export function balanceEmbed(pp: number, ltc: number, extraNote?: string): EmbedBuilder {
-  const total = pp + ltc;
-  const gauge = railGauge(pp, ltc);
-  const ppPct = total > 0 ? Math.round(pp * 100 / total) : 0;
-  const ltcPct = total > 0 ? 100 - ppPct : 0;
+export async function balanceReply(pp: number, ltc: number, note?: string) {
+  const png = await renderBalance({ pp, ltc, note });
+  const file = new AttachmentBuilder(png, { name: 'balance.png' });
   const embed = new EmbedBuilder()
-    .setTitle('💰  残高')
     .setColor(0xd4af37)
-    .setDescription(
-      `${gauge}\n` +
-      `🟥 **PayPay 由来**: ¥${pp.toLocaleString()} (${ppPct}%)\n` +
-      `🟦 **LTC 由来**:    ¥${ltc.toLocaleString()} (${ltcPct}%)\n` +
-      `\n**合計: ¥${total.toLocaleString()}**`
-    );
-  if (extraNote) embed.setFooter({ text: extraNote });
-  else embed.setFooter({ text: '入金したレール分だけ、そのレールで出金できます' });
-  return embed;
+    .setImage('attachment://balance.png')
+    .setFooter({ text: '入金したレール分だけ、そのレールで出金できます' });
+  return { embeds: [embed], files: [file] };
 }
 
 export function depositPanel() {
   const embed = new EmbedBuilder()
-    .setTitle(`💵  ${L('CASHIER')}  💵`)
+    .setTitle(`${L('CASHIER')}`)
     .setDescription(
       `**1 ${L('chip')} = ¥1 の内部通貨**。入金で発行、出金で焼却。\n` +
-      `残高は 🟥 **PayPay 由来** / 🟦 **LTC 由来** に分かれて管理されます。\n` +
-      `例: ${railGauge(7, 4)}\n` +
-      `**出金は入金したレール分が上限** (PayPay で入れた分は PayPay から、LTC で入れた分は LTC から)。`
+      `残高は **PayPay 由来** と **LTC 由来** に分かれて管理されます。\n` +
+      `**出金は入金したレール分が上限** — PayPay で入れた分は PayPay から、LTC で入れた分は LTC から。\n` +
+      `残高確認ボタンで自分のゲージを表示できます。`
     )
     .setColor(0xd4af37)
     .addFields(
-      { name: '📥 入金', value:
-        `💴 **PayPay** 送金リンクを貼るだけで即 chip 加算 (¥${MIN_DEPOSIT_JPY.paypay}〜) → 🟥 ゲージに加算\n` +
-        `💠 **LTC**   アドレスを発行、1 承認で自動チャージ (¥${MIN_DEPOSIT_JPY.ltc}〜) → 🟦 ゲージに加算`,
+      { name: '入金', value:
+        `**PayPay** 送金リンクを貼るだけで即 chip 加算 (¥${MIN_DEPOSIT_JPY.paypay}〜) — PayPay 側に加算\n` +
+        `**LTC**    アドレスを発行、1 承認で自動チャージ (¥${MIN_DEPOSIT_JPY.ltc}〜) — LTC 側に加算`,
         inline: false },
-      { name: '📤 出金', value:
-        `💴 **PayPay** 手数料ゼロ・自動送金 (¥${MIN_WITHDRAW_JPY.paypay}〜 / 🟥 の範囲内)\n` +
-        `💠 **LTC**   任意アドレス指定・ネットワーク手数料あり (¥${MIN_WITHDRAW_JPY.ltc}〜 / 🟦 の範囲内)`,
+      { name: '出金', value:
+        `**PayPay** 手数料ゼロ・自動送金 (¥${MIN_WITHDRAW_JPY.paypay}〜 / PayPay 由来の範囲)\n` +
+        `**LTC**    任意アドレス指定・ネットワーク手数料あり (¥${MIN_WITHDRAW_JPY.ltc}〜 / LTC 由来の範囲)`,
         inline: false },
       { name: L('Rate'), value: `LTC は CoinGecko の現在レートで JPY 換算`, inline: false },
     )
-    .setFooter({ text: 'Discord C4sino · Cashier — 残高確認ボタンで自分のゲージを表示' });
+    .setFooter({ text: 'Discord C4sino · Cashier' });
 
   const depSelect = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId('dep:method')
-      .setPlaceholder('📥 入金方法を選択…')
+      .setPlaceholder('入金方法を選択…')
       .addOptions(
-        { label: 'PayPay 送金リンクで入金', value: 'paypay', description: '送金リンク URL / ID を貼り付け', emoji: '💴' },
-        { label: 'LTC で入金',               value: 'ltc',    description: '専用アドレスを発行、送金後に自動チャージ', emoji: '💠' },
+        { label: 'PayPay 送金リンクで入金', value: 'paypay', description: '送金リンク URL / ID を貼り付け' },
+        { label: 'LTC で入金',               value: 'ltc',    description: '専用アドレスを発行、送金後に自動チャージ' },
       )
   );
   const wdSelect = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
     new StringSelectMenuBuilder()
       .setCustomId('wd:method')
-      .setPlaceholder('📤 出金方法を選択…')
+      .setPlaceholder('出金方法を選択…')
       .addOptions(
-        { label: 'PayPay で出金', value: 'paypay', description: '送金リンクを DM で受取 (手数料無料)', emoji: '💴' },
-        { label: 'LTC で出金',    value: 'ltc',    description: '任意の LTC アドレスへ送金 (手数料あり)', emoji: '💠' },
+        { label: 'PayPay で出金', value: 'paypay', description: '送金リンクを DM で受取 (手数料無料)' },
+        { label: 'LTC で出金',    value: 'ltc',    description: '任意の LTC アドレスへ送金 (手数料あり)' },
       )
   );
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
