@@ -216,6 +216,21 @@ export function crapsControlRows(state: { phase: 'comeout'|'point'; point?: numb
   return [select, row];
 }
 
+export function leetPanel() {
+  const embed = new EmbedBuilder()
+    .setTitle('LEET 変換')
+    .setColor(0x6b7280)
+    .setDescription(
+      '入力したアルファベットをオリジナル LEET に変換します。\n' +
+      '結果は投稿者本人にのみ表示されます (ephemeral)。'
+    )
+    .setFooter({ text: '管理者用ツール' });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('leet:convert').setLabel('変換').setStyle(ButtonStyle.Primary),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
 /* ────────────── Per-game Play panels (mix bet 対応) ────────────── */
 
 export function bjPlayPanel() {

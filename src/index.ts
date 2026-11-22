@@ -20,7 +20,7 @@ import { renderRoulette } from './ui/render-roulette.js';
 import { renderBaccarat } from './ui/render-baccarat.js';
 import { renderVideoPoker } from './ui/render-videopoker.js';
 import { renderCraps } from './ui/render-craps.js';
-import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel } from './ui/panels.js';
+import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel } from './ui/panels.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
@@ -105,6 +105,7 @@ async function onCommand(i: ChatInputCommandInteraction) {
     case 'overview': return cmdOverview(i);
     case 'banned-words': return cmdBannedWords(i);
     case 'paypay':       return cmdPaypay(i);
+    case 'leet':         return cmdLeet(i);
     case 'blackjack':  return installPlayPanel(i, 'blackjack');
     case 'slots':      return installPlayPanel(i, 'slots');
     case 'roulette':   return installPlayPanel(i, 'roulette');
@@ -220,6 +221,18 @@ async function cmdBalance(i: ChatInputCommandInteraction) {
   const r = getReserves(i.user.id);
   const payload = await balanceReply(r.pp, r.ltc);
   await i.reply({ ...payload, flags: MessageFlags.Ephemeral });
+}
+
+/* ────────────── /leet (admin LEET converter panel) ────────────── */
+
+async function cmdLeet(i: ChatInputCommandInteraction) {
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
+  if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
+  const msg = await i.channel.send(leetPanel());
+  db.prepare('INSERT OR REPLACE INTO panels(guild_id,channel_id,message_id,game) VALUES (?,?,?,?)')
+    .run(i.guildId!, i.channelId, msg.id, 'leet');
+  await i.reply({ content: '✅ LEET 変換パネルを設置しました', flags: MessageFlags.Ephemeral });
 }
 
 /* ────────────── /paypay (admin direct ops) ────────────── */
@@ -539,6 +552,7 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
 async function onButton(i: ButtonInteraction) {
   const [ns, kind, arg] = i.customId.split(':');
   if (ns === 'play') return onPlayButton(i);          // play:<game>[:<subarg>]
+  if (ns === 'leet' && kind === 'convert') return onLeetButton(i);
   if (ns === 'bj') return onBJButton(i, kind, arg);
   if (ns === 'slot') return onSlotButton(i, kind, arg);
   if (ns === 'rou')  return onRouletteButton(i, kind, arg);
@@ -1486,6 +1500,21 @@ async function processPaypayDeposit(discordId: string, linkInput: string, passco
 
 /* ────────────── MODAL ────────────── */
 
+/* ────────────── LEET convert button ────────────── */
+
+async function onLeetButton(i: ButtonInteraction) {
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
+  const modal = new ModalBuilder().setCustomId('leet:input').setTitle('LEET 変換')
+    .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
+      new TextInputBuilder().setCustomId('text')
+        .setLabel('変換する文字列 (アルファベットが対象)')
+        .setStyle(TextInputStyle.Paragraph)
+        .setMaxLength(1800)
+        .setRequired(true)));
+  return i.showModal(modal);
+}
+
 /* ────────────── Play button (mix bet) ────────────── */
 
 async function onPlayButton(i: ButtonInteraction) {
@@ -1559,6 +1588,14 @@ async function handlePlayMixSubmit(i: ModalSubmitInteraction, game: string, sub:
 }
 
 async function onModal(i: ModalSubmitInteraction) {
+  if (i.customId === 'leet:input') {
+    if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+      return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
+    const src = i.fields.getTextInputValue('text');
+    const converted = L(src);
+    const body = `**変換結果:**\n\`\`\`\n${converted}\n\`\`\``;
+    return i.reply({ content: body.slice(0, 2000), flags: MessageFlags.Ephemeral });
+  }
   if (i.customId.startsWith('play-mix:')) {
     const parts = i.customId.split(':');
     const game = parts[1];

@@ -118,6 +118,11 @@ const baccaratCmd   = gamePanel('baccarat',   'Baccarat');
 const videopokerCmd = gamePanel('videopoker', 'Video Poker');
 const crapsCmd      = gamePanel('craps',      'Craps');
 
+const leetCmd = new SlashCommandBuilder()
+  .setName('leet')
+  .setDescription('LEET 変換パネルをこのチャンネルに設置 (管理者)')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString());
+
 const paypay = new SlashCommandBuilder()
   .setName('paypay')
   .setDescription('PayPay 直接操作 (管理者)')
@@ -131,7 +136,7 @@ const paypay = new SlashCommandBuilder()
     .addStringOption(o => o.setName('passcode').setDescription('リンクのパスコード (省略可、推奨)').setRequired(false)));
 
 const commands = [
-  setup, balance, overview, pay, withdraw, wallet, admin, bannedWords, paypay,
+  setup, balance, overview, pay, withdraw, wallet, admin, bannedWords, paypay, leetCmd,
   blackjackCmd, slotsCmd, rouletteCmd, baccaratCmd, videopokerCmd, crapsCmd,
 ].map(c => c.toJSON());
 
