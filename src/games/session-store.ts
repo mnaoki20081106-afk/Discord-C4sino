@@ -5,13 +5,14 @@ import type { CrapsState } from './craps.js';
 
 type AnyState = BJState | VPHand | CrapsState | { kind: 'slots'; bet: number };
 
-interface Entry { id: string; discordId: string; game: 'blackjack'|'slots'|'videopoker'|'craps'; state: AnyState; bet: number; }
+export interface BetMix { pp: number; ltc: number }
+interface Entry { id: string; discordId: string; game: 'blackjack'|'slots'|'videopoker'|'craps'; state: AnyState; bet: number; mix?: BetMix; }
 
 const map = new Map<string, Entry>();
 
-export function create(discordId: string, game: Entry['game'], state: AnyState, bet: number): Entry {
+export function create(discordId: string, game: Entry['game'], state: AnyState, bet: number, mix?: BetMix): Entry {
   const id = randomUUID();
-  const e: Entry = { id, discordId, game, state, bet };
+  const e: Entry = { id, discordId, game, state, bet, mix };
   map.set(id, e);
   return e;
 }

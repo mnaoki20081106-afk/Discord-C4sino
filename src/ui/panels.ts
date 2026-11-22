@@ -216,6 +216,154 @@ export function crapsControlRows(state: { phase: 'comeout'|'point'; point?: numb
   return [select, row];
 }
 
+/* ────────────── Per-game Play panels (mix bet 対応) ────────────── */
+
+export function bjPlayPanel() {
+  const embed = new EmbedBuilder()
+    .setTitle(L('BLACKJACK'))
+    .setColor(0x0d5a3a)
+    .setDescription(
+      '6 デッキシューで Dealer soft 17 Hit (H17)、Blackjack 配当 **3:2**。\n' +
+      'Double / Split (最大 4 ハンド) 対応。'
+    )
+    .addFields(
+      { name: 'ルール', value:
+        '・Blackjack (A + 10 点札) で即勝ち 3:2\n' +
+        '・Dealer は 17 以上まで Hit (soft 17 も Hit)\n' +
+        '・Split した A は 1 枚ずつのみ Hit 可\n' +
+        '・Double は最初の 2 枚のみ',
+        inline: false },
+      { name: '最小 / 最大 BET', value: '`10` / `50,000` chips', inline: true },
+      { name: 'ハウスエッジ', value: '約 0.6%', inline: true },
+    )
+    .setFooter({ text: 'Play を押して BET 額を入力' });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('play:blackjack').setLabel('Play').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
+export function slotsPlayPanel() {
+  const embed = new EmbedBuilder()
+    .setTitle(L('SLOTS'))
+    .setColor(0x7c2d12)
+    .setDescription(
+      '3 リール 8 シンボルの古典型スロット。各リールが独立に停止します。'
+    )
+    .addFields(
+      { name: '配当', value:
+        '・3-of-a-kind: シンボル固有倍率 (5x〜200x)\n' +
+        '・2 連 🍒: 2x サイド配当',
+        inline: false },
+      { name: '最小 / 最大 BET', value: '`10` / `25,000` chips', inline: true },
+      { name: 'RTP (目安)', value: '94〜96%', inline: true },
+    )
+    .setFooter({ text: 'Play を押して BET 額を入力' });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('play:slots').setLabel('Play').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
+export function vpPlayPanel() {
+  const embed = new EmbedBuilder()
+    .setTitle(L('VIDEO POKER'))
+    .setColor(0x1e3a8a)
+    .setDescription(
+      'Jacks or Better 9/6 配当表。最初に 5 枚配られ、Hold したいカードを選んで Draw。'
+    )
+    .addFields(
+      { name: '配当 (BET=1 基準)', value:
+        'Royal 800 / Straight Flush 50 / 4-of-a-kind 25\n' +
+        'Full House 9 / Flush 6 / Straight 4 / 3-of-a-kind 3\n' +
+        'Two Pair 2 / Jacks or Better 1',
+        inline: false },
+      { name: '最小 / 最大 BET', value: '`10` / `10,000` chips', inline: true },
+      { name: 'RTP (完璧プレイ)', value: '約 99.5%', inline: true },
+    )
+    .setFooter({ text: 'Play を押して BET 額を入力' });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('play:videopoker').setLabel('Play').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
+export function roulettePlayPanel() {
+  const embed = new EmbedBuilder()
+    .setTitle(L('ROULETTE'))
+    .setColor(0x991b1b)
+    .setDescription(
+      'シングルゼロ (ヨーロピアン)。賭け方を選んで BET 額を入力してください。'
+    )
+    .addFields(
+      { name: '配当', value:
+        '・Straight (1 数字) **35:1**\n' +
+        '・Red / Black / Odd / Even / Low / High **1:1**\n' +
+        '・Dozen / Column **2:1**',
+        inline: false },
+      { name: '最小 / 最大 BET', value: '`10` / `20,000` chips', inline: true },
+      { name: 'ハウスエッジ', value: '2.70% (0 の一枠)', inline: true },
+    )
+    .setFooter({ text: '賭け方を押して BET 額を入力' });
+  const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('play:roulette:red').setLabel('Red').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('play:roulette:black').setLabel('Black').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('play:roulette:odd').setLabel('Odd').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('play:roulette:even').setLabel('Even').setStyle(ButtonStyle.Primary),
+  );
+  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('play:roulette:low').setLabel('1-18').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('play:roulette:high').setLabel('19-36').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('play:roulette:straight').setLabel('Number (0-36)').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row1, row2] };
+}
+
+export function baccaratPlayPanel() {
+  const embed = new EmbedBuilder()
+    .setTitle(L('BACCARAT'))
+    .setColor(0x065f46)
+    .setDescription(
+      '8 デッキ、標準的な Baccarat ルール (Punto Banco)。'
+    )
+    .addFields(
+      { name: '配当', value:
+        '・Player 勝ち **1:1**\n' +
+        '・Banker 勝ち **1:0.95** (5% コミッション)\n' +
+        '・Tie **8:1**',
+        inline: false },
+      { name: '最小 / 最大 BET', value: '`10` / `30,000` chips', inline: true },
+      { name: 'ハウスエッジ', value: 'Banker 1.06% / Player 1.24% / Tie 14.4%', inline: true },
+    )
+    .setFooter({ text: '賭け先を押して BET 額を入力' });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('play:baccarat:player').setLabel('Player').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('play:baccarat:banker').setLabel('Banker').setStyle(ButtonStyle.Danger),
+    new ButtonBuilder().setCustomId('play:baccarat:tie').setLabel('Tie').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
+export function crapsPlayPanel() {
+  const embed = new EmbedBuilder()
+    .setTitle(L('CRAPS'))
+    .setColor(0xb45309)
+    .setDescription(
+      '2 ダイスで Point / Come-out を解決。複数 BET をテーブルに置いて同時解決します。\n' +
+      '**mix BET が複雑なため、従来の `/setup game:craps` パネルから開始してください。**'
+    )
+    .setFooter({ text: 'Craps は近日 mix bet 対応予定' });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
 /**
  * 残高カード (画像 embed)。/balance と Cashier パネルの残高確認で使用。
  * 返り値をそのまま interaction.reply に展開できる形で返す。

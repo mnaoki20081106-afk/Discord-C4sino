@@ -187,6 +187,23 @@ export const applyMix = db.transaction((discordId: string, ppDelta: number, ltcD
   db.prepare('INSERT INTO ledger(discord_id, delta, reason, ref) VALUES (?,?,?,?)').run(discordId, delta, reason, ref ?? null);
 });
 
+/** 指定された BET mix の比率で WIN を按分して credit。LTC が奇数端数で落ちるぶんは PP 側に寄せる。 */
+export function payoutByMix(
+  discordId: string, payout: number, mix: { pp: number; ltc: number }, reason: string, ref?: string
+): { pp: number; ltc: number } {
+  if (payout <= 0) return { pp: 0, ltc: 0 };
+  const total = mix.pp + mix.ltc;
+  if (total <= 0) {
+    // mix 情報が壊れている時のフォールバック: 現比率で credit
+    txCredit(discordId, payout, reason, ref);
+    return { pp: payout, ltc: 0 };
+  }
+  const ltcPart = Math.floor(payout * mix.ltc / total);
+  const ppPart = payout - ltcPart;
+  applyMix(discordId, ppPart, ltcPart, reason, ref);
+  return { pp: ppPart, ltc: ltcPart };
+}
+
 /** 比率を保ったまま debit (reserves の比率で按分)。整数端数は pp 側に寄せる。 */
 function splitProportional(pp: number, ltc: number, amount: number): { pp: number; ltc: number } {
   const total = pp + ltc;

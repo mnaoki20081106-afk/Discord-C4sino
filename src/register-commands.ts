@@ -107,7 +107,21 @@ const bannedWords = new SlashCommandBuilder()
   .addSubcommand(s => s.setName('remove').setDescription('NG ワードを削除')
     .addStringOption(o => o.setName('word').setDescription('削除するワード').setRequired(true)));
 
-const commands = [setup, balance, overview, pay, withdraw, wallet, admin, bannedWords].map(c => c.toJSON());
+const gamePanel = (name: string, title: string) => new SlashCommandBuilder()
+  .setName(name).setDescription(`${title} 卓をこのチャンネルに設置 (管理者)`)
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels.toString());
+
+const blackjackCmd  = gamePanel('blackjack',  'Blackjack');
+const slotsCmd      = gamePanel('slots',      'Slots');
+const rouletteCmd   = gamePanel('roulette',   'Roulette');
+const baccaratCmd   = gamePanel('baccarat',   'Baccarat');
+const videopokerCmd = gamePanel('videopoker', 'Video Poker');
+const crapsCmd      = gamePanel('craps',      'Craps');
+
+const commands = [
+  setup, balance, overview, pay, withdraw, wallet, admin, bannedWords,
+  blackjackCmd, slotsCmd, rouletteCmd, baccaratCmd, videopokerCmd, crapsCmd,
+].map(c => c.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN!);
 const clientId = process.env.DISCORD_CLIENT_ID!;
