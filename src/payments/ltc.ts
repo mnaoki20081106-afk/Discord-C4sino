@@ -45,7 +45,7 @@ export async function checkDeposits(address: string): Promise<ConfirmedTx[]> {
   const j = await res.json() as { txs?: Array<{ hash: string; confirmations: number; outputs: Array<{ addresses: string[]; value: number }> }> };
   const confirmed: ConfirmedTx[] = [];
   for (const tx of j.txs ?? []) {
-    if (tx.confirmations < 1) continue;
+    if (tx.confirmations < 3) continue;   // reorg 耐性: 3-conf (≈ 7.5 分)
     const out = tx.outputs.find(o => o.addresses?.includes(address));
     if (!out) continue;
     confirmed.push({ txid: tx.hash, value_ltc: out.value / 1e8 });
@@ -53,12 +53,29 @@ export async function checkDeposits(address: string): Promise<ConfirmedTx[]> {
   return confirmed;
 }
 
-// LTC/JPY レート (CoinGecko, 無認証)
+// LTC/JPY レート (CoinGecko, 無認証)。sticky cache で CoinGecko 障害時も 1h は前回値を使う。
+let _rateCache: { at: number; rate: number } | null = null;
+const RATE_FRESH_MS = 5 * 60_000;      // 5 分以内: そのまま返す (API 叩かない)
+const RATE_STICKY_MS = 60 * 60_000;    // 60 分以内: API 失敗時のフォールバックとして使う
 export async function ltcJpyRate(): Promise<number> {
-  const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=litecoin&vs_currencies=jpy');
-  if (!r.ok) throw new Error('rate fetch failed');
-  const j = await r.json() as { litecoin: { jpy: number } };
-  return j.litecoin.jpy;
+  const now = Date.now();
+  if (_rateCache && now - _rateCache.at < RATE_FRESH_MS) return _rateCache.rate;
+  try {
+    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=litecoin&vs_currencies=jpy',
+      { signal: AbortSignal.timeout(10_000) });
+    if (!r.ok) throw new Error(`coingecko ${r.status}`);
+    const j = await r.json() as { litecoin: { jpy: number } };
+    const rate = j.litecoin.jpy;
+    if (!Number.isFinite(rate) || rate <= 0) throw new Error('coingecko malformed rate');
+    _rateCache = { at: now, rate };
+    return rate;
+  } catch (e) {
+    if (_rateCache && now - _rateCache.at < RATE_STICKY_MS) {
+      console.warn(`[ltcJpyRate] fresh fetch failed, using sticky cache (${((now - _rateCache.at)/1000)|0}s old):`, (e as Error).message);
+      return _rateCache.rate;
+    }
+    throw e;
+  }
 }
 
 /**

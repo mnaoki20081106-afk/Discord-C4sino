@@ -134,6 +134,8 @@ async function installPlayPanel(i: ChatInputCommandInteraction, game: 'blackjack
 }
 
 async function cmdBannedWords(i: ChatInputCommandInteraction) {
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
   if (!i.guild) return i.reply({ content: 'ギルド内で実行してください', flags: MessageFlags.Ephemeral });
   const sub = i.options.getSubcommand();
 
@@ -344,6 +346,8 @@ async function cmdPaypay(i: ChatInputCommandInteraction) {
 /* ────────────── WALLET ADMIN ────────────── */
 
 async function cmdWallet(i: ChatInputCommandInteraction) {
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
   const sub = i.options.getSubcommand();
   if (sub === 'add-paypay') {
     const label = i.options.getString('label', true);
@@ -360,8 +364,9 @@ async function cmdWallet(i: ChatInputCommandInteraction) {
     const label = i.options.getString('label', true);
     const address = i.options.getString('address')?.trim();
     if (address) {
-      if (!/^[A-HJ-NP-Za-km-z1-9]{25,100}$|^ltc1[0-9a-z]{25,100}$/.test(address))
-        return i.reply({ content: 'LTC アドレスの形式が不正です', flags: MessageFlags.Ephemeral });
+      const { isValidLtcAddress } = await import('./payments/ltc-address.js');
+      if (!isValidLtcAddress(address))
+        return i.reply({ content: 'LTC アドレスではありません (L / M / ltc1 のみ受付)', flags: MessageFlags.Ephemeral });
       const id = wallets.addLtcWallet(i.user.id, label, address);
       return i.reply({ content: `✅ LTC ウォレット (view-only) 追加 id=${id}`, flags: MessageFlags.Ephemeral });
     }
@@ -454,15 +459,47 @@ function formatLedgerLine(delta: number, reason: string, ref: string | null): st
 }
 
 async function cmdAdmin(i: ChatInputCommandInteraction) {
+  // サーバー管理画面の "Integrations → Permissions" 上書きで誤付与されても
+  // 内部で ManageGuild を再チェックし素通しを防ぐ
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
   const sub = i.options.getSubcommand();
   if (sub === 'balance') {
     const u = i.options.getUser('user', true);
     const delta = i.options.getInteger('delta', true);
     const reason = i.options.getString('reason') ?? 'admin-adjust';
+    const ADMIN_DELTA_CAP = 100_000;
+    if (!Number.isFinite(delta) || Math.abs(delta) > ADMIN_DELTA_CAP) {
+      return i.reply({ content: `delta は -${ADMIN_DELTA_CAP.toLocaleString()} 〜 +${ADMIN_DELTA_CAP.toLocaleString()} の範囲で指定してください (監査制限)`, flags: MessageFlags.Ephemeral });
+    }
+    if (reason === 'admin-adjust') {
+      return i.reply({ content: '理由 (reason) を明示してください (監査用)', flags: MessageFlags.Ephemeral });
+    }
     try {
       ensureUser(u.id);
       txCredit(u.id, delta, `admin:${reason}`, i.user.id);
       const bal = getBalance(u.id);
+      // 監査: admin チャンネルに通知
+      if (i.guildId) {
+        const adminCh = getAdminChannel(i.guildId);
+        if (adminCh) {
+          try {
+            const ch = await client.channels.fetch(adminCh);
+            if (ch && 'send' in ch) {
+              const embed = new EmbedBuilder()
+                .setTitle('🔔 admin balance 操作')
+                .setColor(delta >= 0 ? 0xf59e0b : 0xef4444)
+                .addFields(
+                  { name: '実行者', value: `<@${i.user.id}>`, inline: true },
+                  { name: '対象', value: `<@${u.id}>`, inline: true },
+                  { name: 'delta', value: `${delta>=0?'+':''}${delta.toLocaleString()}`, inline: true },
+                  { name: '理由', value: reason },
+                );
+              await (ch as any).send({ embeds: [embed] });
+            }
+          } catch { /* best-effort */ }
+        }
+      }
       return i.reply({ content: `✅ <@${u.id}> ${delta>=0?'+':''}${delta} → 残高 ${bal.toLocaleString()}`, flags: MessageFlags.Ephemeral });
     } catch (e: any) {
       return i.reply({ content: `❌ ${e.message}`, flags: MessageFlags.Ephemeral });
@@ -757,8 +794,9 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
     const dest = i.options.getString('dest', true).trim();
     const ltcAmount = i.options.getNumber('ltc', true);
     const reason = i.options.getString('reason') ?? 'admin-send';
-    if (!/^[A-HJ-NP-Za-km-z1-9]{25,100}$|^ltc1[0-9a-z]{25,100}$/.test(dest))
-      return i.reply({ content: '❌ LTC アドレスの形式が不正', flags: MessageFlags.Ephemeral });
+    const { isValidLtcAddress } = await import('./payments/ltc-address.js');
+    if (!isValidLtcAddress(dest))
+      return i.reply({ content: '❌ LTC アドレスではありません (L / M / ltc1 のみ受付)', flags: MessageFlags.Ephemeral });
     await i.deferReply({ flags: MessageFlags.Ephemeral });
 
     const rate = await (await import('./payments/ltc.js')).ltcJpyRate();
@@ -938,8 +976,32 @@ async function onBJButton(i: ButtonInteraction, kind: string, arg: string) {
     const entry = sessions.get(sid);
     if (!entry || entry.discordId !== i.user.id) return i.reply({ content: 'このセッションは他のユーザーのものです', flags: MessageFlags.Ephemeral });
     const st = entry.state as BJState;
+    const action = arg as 'hit'|'stand'|'double'|'split';
+
+    // double / split は 追加 BET が発生するので chip を実際に debit する
+    if (action === 'double' || action === 'split') {
+      const addlBet = st.bets[st.active];  // 現在ハンドの BET 分を追加
+      if (getBalance(i.user.id) < addlBet) {
+        return i.reply({ content: `残高不足 (必要: ¥${addlBet.toLocaleString()})`, flags: MessageFlags.Ephemeral });
+      }
+      try {
+        if (entry.mix) {
+          // mix の場合: 元 BET と同比率で追加 debit
+          const total = entry.mix.pp + entry.mix.ltc;
+          const ppAdd  = total > 0 ? Math.floor(addlBet * entry.mix.pp / total) : addlBet;
+          const ltcAdd = addlBet - ppAdd;
+          applyMix(i.user.id, -ppAdd, -ltcAdd, `bet:blackjack:${action}`, sid);
+          entry.mix = { pp: entry.mix.pp + ppAdd, ltc: entry.mix.ltc + ltcAdd };
+        } else {
+          txCredit(i.user.id, -addlBet, `bet:blackjack:${action}`, sid);
+        }
+      } catch (e: any) {
+        return i.reply({ content: `❌ ${e.message}`, flags: MessageFlags.Ephemeral });
+      }
+    }
+
     const cap = await housePayoutCap();
-    apply(st, arg as 'hit'|'stand'|'double'|'split', cap);
+    apply(st, action, cap);
     await updateBJMessage(i, entry.id, st);
   }
 }

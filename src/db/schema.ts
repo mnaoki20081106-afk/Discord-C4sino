@@ -113,7 +113,7 @@ CREATE TABLE IF NOT EXISTS withdrawals (
   link_url     TEXT,                         -- PayPay 送金リンク
   tx_ref       TEXT,                         -- order_id or LTC txid
   wallet_id    INTEGER,
-  status       TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed','cancelled')),
+  status       TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','broadcasting','broadcast_failed','sent','failed','cancelled')),
   reason       TEXT,
   created_at   INTEGER NOT NULL DEFAULT (strftime('%s','now')),
   completed_at INTEGER
@@ -151,6 +151,42 @@ CREATE TABLE IF NOT EXISTS achievements (
 );
 CREATE INDEX IF NOT EXISTS idx_ach_guild ON achievements(guild_id);
 `);
+
+// Migration: 旧 withdrawals.status CHECK に broadcasting / broadcast_failed を追加
+try {
+  const r = db.prepare(`SELECT sql FROM sqlite_master WHERE type='table' AND name='withdrawals'`).get() as { sql: string } | undefined;
+  if (r && !r.sql.includes('broadcasting')) {
+    db.exec(`
+      PRAGMA foreign_keys=OFF;
+      BEGIN;
+      ALTER TABLE withdrawals RENAME TO withdrawals_old;
+      CREATE TABLE withdrawals (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        discord_id   TEXT NOT NULL,
+        method       TEXT NOT NULL CHECK(method IN ('paypay','ltc')),
+        amount_jpy   INTEGER NOT NULL,
+        fee_jpy      INTEGER NOT NULL DEFAULT 0,
+        net_jpy      INTEGER NOT NULL,
+        dest         TEXT,
+        passcode     TEXT,
+        link_url     TEXT,
+        tx_ref       TEXT,
+        wallet_id    INTEGER,
+        status       TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','broadcasting','broadcast_failed','sent','failed','cancelled')),
+        reason       TEXT,
+        created_at   INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+        completed_at INTEGER
+      );
+      INSERT INTO withdrawals SELECT * FROM withdrawals_old;
+      DROP TABLE withdrawals_old;
+      CREATE INDEX IF NOT EXISTS idx_withdrawals_user   ON withdrawals(discord_id, status);
+      CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals(status);
+      COMMIT;
+      PRAGMA foreign_keys=ON;
+    `);
+    console.log('[db] withdrawals CHECK migrated');
+  }
+} catch (e) { console.error('[db] withdrawals migration failed:', e); }
 
 // Migration: 既存ユーザーに pp_reserve / ltc_reserve が無ければ追加し、
 // 既存 balance を全額 pp_reserve に寄せる (保守的 — LTC 出金は実際の LTC 入金分に限定)

@@ -32,11 +32,29 @@ SECRET = os.environ.get("SIDECAR_SECRET", "")
 PORT   = int(os.environ.get("SIDECAR_PORT", "8787"))
 PROXY  = os.environ.get("PAYPAY_PROXY") or None
 
+# fail-open 防止: SECRET 未設定時は起動拒否 (本番環境での認証バイパスを防ぐ)
+if not SECRET:
+    sys.stderr.write("FATAL: SIDECAR_SECRET must be set. Refusing to start without authentication.\n")
+    sys.exit(1)
+
 app = Flask(__name__)
 
 # 進行中ログインセッション (session_id -> PayPay インスタンス)
 _pending: dict[str, PayPay] = {}
 _lock = threading.Lock()
+
+# アクセストークン単位の直列化ロック: 同一アカウントへの並列 API 呼び出しを
+# 禁止して PayPay 側の不審検知 (device_uuid 多重) を避ける
+_token_locks: dict[str, threading.Lock] = {}
+_token_locks_mu = threading.Lock()
+
+def _lock_for_token(access_token: str) -> threading.Lock:
+    with _token_locks_mu:
+        lk = _token_locks.get(access_token)
+        if lk is None:
+            lk = threading.Lock()
+            _token_locks[access_token] = lk
+        return lk
 
 
 def _auth() -> bool:
@@ -58,6 +76,10 @@ def _guard():
 def _from_token(access_token: str) -> PayPay:
     pp = PayPay(access_token=access_token, proxy=PROXY)
     return pp
+
+def _with_token_lock(access_token: str):
+    """access_token ごとのロックを acquire するコンテキストマネージャを返す"""
+    return _lock_for_token(access_token)
 
 
 @app.post("/login/start")
@@ -142,7 +164,8 @@ def wallet_balance():
     if not at:
         return _err("access_token required")
     try:
-        b = _from_token(at).get_balance()
+        with _with_token_lock(at):
+            b = _from_token(at).get_balance()
     except PayPayLoginError as e:
         return _err(f"login_error: {e}", 401)
     except PayPayError as e:
@@ -161,7 +184,8 @@ def wallet_profile():
     j = request.get_json(force=True)
     at = j.get("access_token")
     try:
-        p = _from_token(at).get_profile()
+        with _with_token_lock(at):
+            p = _from_token(at).get_profile()
     except PayPayError as e:
         return _err(f"paypay_error: {e}", 500)
     return jsonify({
@@ -206,12 +230,13 @@ def link_receive():
         return _err("access_token/code required")
     pp = _from_token(at)
     try:
-        info = pp.link_check(code)
-        if info.status != "PENDING":
-            return _err(f"link not pending (status={info.status})", 409)
-        if info.has_password and not passcode:
-            return _err("passcode required", 400)
-        pp.link_receive(code, passcode=passcode)
+        with _with_token_lock(at):
+            info = pp.link_check(code)
+            if info.status != "PENDING":
+                return _err(f"link not pending (status={info.status})", 409)
+            if info.has_password and not passcode:
+                return _err("passcode required", 400)
+            pp.link_receive(code, passcode=passcode)
     except PayPayLoginError as e:
         return _err(f"login_error: {e}", 401)
     except PayPayError as e:
@@ -228,7 +253,8 @@ def wallet_create_link():
     if not at or amount is None:
         return _err("access_token/amount required")
     try:
-        link = _from_token(at).create_link(amount=int(amount), passcode=passcode)
+        with _with_token_lock(at):
+            link = _from_token(at).create_link(amount=int(amount), passcode=passcode)
     except PayPayLoginError as e:
         return _err(f"login_error: {e}", 401)
     except PayPayError as e:
@@ -245,7 +271,8 @@ def alive():
     j = request.get_json(force=True)
     at = j.get("access_token")
     try:
-        _from_token(at).alive()
+        with _with_token_lock(at):
+            _from_token(at).alive()
     except PayPayError as e:
         return _err(f"paypay_error: {e}", 500)
     return jsonify({"ok": True})

@@ -3,6 +3,7 @@ import { db, txCredit, getBalance, getReserves, debitRail, creditRail } from '..
 import * as pp from './paypay-client.js';
 import * as wallets from './wallets.js';
 import { ltcJpyRate, sendLtc, addressBalanceLtc } from './ltc.js';
+import { isValidLtcAddress } from './ltc-address.js';
 import { MIN_WITHDRAW_JPY, LTC_NETWORK_FEE_JPY } from './limits.js';
 
 export interface WithdrawReq {
@@ -99,9 +100,14 @@ export async function withdrawPayPay(client: Client, r: WithdrawReq): Promise<{ 
 export async function withdrawLtc(client: Client, adminChannelId: string | null, r: WithdrawReq): Promise<{ id: number; ltcAmount: number; auto: boolean; txid?: string }> {
   if (r.amountJpy < MIN_WITHDRAW_JPY.ltc) throw new Error(`LTC の最低出金額は ¥${MIN_WITHDRAW_JPY.ltc.toLocaleString()} です`);
   if (!r.dest) throw new Error('LTC アドレスが未指定');
-  if (!/^[A-HJ-NP-Za-km-z1-9]{25,100}$|^ltc1[0-9a-z]{25,100}$/.test(r.dest)) throw new Error('LTC アドレスの形式が不正');
+  if (!isValidLtcAddress(r.dest))
+    throw new Error('LTC アドレスではありません (L / M / ltc1 のみ受付、BTC や他通貨アドレスは拒否)');
   if (!hasEnoughChips(r.discordId, r.amountJpy)) throw new Error('chip 残高が不足しています');
   assertRailAvailable(r.discordId, 'ltc', r.amountJpy);
+
+  // マネロン対策: 入金してすぐ LTC 出金 = 両替所化防止。最低 1 回は BET していること
+  const bets = (db.prepare(`SELECT COUNT(*) c FROM ledger WHERE discord_id=? AND reason LIKE 'bet:%'`).get(r.discordId) as any).c as number;
+  if (bets === 0) throw new Error('LTC 出金には最低 1 回のゲームプレイが必要です (入金直後の LTC 出金はできません)');
 
   const rate = await ltcJpyRate();
   const netJpy = Math.max(0, r.amountJpy - LTC_NETWORK_FEE_JPY);
@@ -127,10 +133,17 @@ export async function withdrawLtc(client: Client, adminChannelId: string | null,
     try { bal = await addressBalanceLtc(w.address); } catch { continue; }
     if (bal < ltcAmount + 0.0001) continue;     // fee ぶん余分に見る
 
+    // broadcast 前に "in-flight" marker を書く。プロセス落ち・タイムアウトで中断した場合、
+    // 復帰時は status が 'broadcasting' のまま残り、二重送金可能なウィンドウを即検知できる。
+    const broadcastRes = db.prepare(`UPDATE withdrawals SET status='broadcasting', wallet_id=? WHERE id=? AND status='pending'`).run(w.id, id);
+    if (broadcastRes.changes !== 1) {
+      // 既に別経路で処理された (管理者承認、再試行) → スキップ
+      break;
+    }
     try {
       const sent = await sendLtc(w.address, w.key.priv, r.dest, ltcAmount);
-      db.prepare('UPDATE withdrawals SET status="sent", wallet_id=?, tx_ref=?, completed_at=strftime("%s","now") WHERE id=?')
-        .run(w.id, sent.txid, id);
+      db.prepare('UPDATE withdrawals SET status="sent", tx_ref=?, completed_at=strftime("%s","now") WHERE id=?')
+        .run(sent.txid, id);
       wallets.adjustCached(w.id, -r.amountJpy);     // 送金額ぶんを即時減算 (chain lag を待たない)
 
       // ユーザーに DM
@@ -151,8 +164,13 @@ export async function withdrawLtc(client: Client, adminChannelId: string | null,
 
       return { id, ltcAmount, auto: true, txid: sent.txid };
     } catch (e) {
-      console.warn(`[withdraw-ltc] auto send failed on wallet #${w.id}: ${(e as Error).message}`);
-      // 次の hot wallet で再試行
+      // broadcast 試行が失敗 → marker を pending に戻さず 'broadcast_failed' に。
+      // 二重送金リスクがあるため、管理者が実際の chain 状態を確認してから手動で
+      // 'sent' or 'failed' に遷移させる。自動再試行しない。
+      db.prepare(`UPDATE withdrawals SET status='broadcast_failed', reason=? WHERE id=? AND status='broadcasting'`)
+        .run((e as Error).message, id);
+      console.warn(`[withdraw-ltc] auto send failed on wallet #${w.id}, marker=broadcast_failed id=${id}: ${(e as Error).message}`);
+      break;   // 自動 retry 中止、admin 確認待ち
     }
   }
 
@@ -190,14 +208,15 @@ export async function withdrawLtc(client: Client, adminChannelId: string | null,
 }
 
 export function markLtcSent(id: number, txid: string) {
-  const r = db.prepare('UPDATE withdrawals SET status="sent", tx_ref=?, completed_at=strftime("%s","now") WHERE id=? AND status="pending"')
-    .run(txid, id);
+  // 'pending' か 'broadcast_failed' (= 自動 broadcast が中断された状態) のどちらでも手動確定可能
+  const r = db.prepare(`UPDATE withdrawals SET status="sent", tx_ref=?, completed_at=strftime("%s","now")
+    WHERE id=? AND status IN ('pending','broadcast_failed')`).run(txid, id);
   if (r.changes === 0) throw new Error('withdrawal not found or already processed');
   return db.prepare('SELECT * FROM withdrawals WHERE id=?').get(id) as any;
 }
 
 export function rejectWithdrawal(id: number, reason: string): any {
-  const w = db.prepare('SELECT * FROM withdrawals WHERE id=? AND status="pending"').get(id) as any;
+  const w = db.prepare(`SELECT * FROM withdrawals WHERE id=? AND status IN ('pending','broadcast_failed')`).get(id) as any;
   if (!w) throw new Error('withdrawal not found or already processed');
   // 元のレールに戻して不変式を維持
   const rail: 'pp'|'ltc' = w.method === 'paypay' ? 'pp' : 'ltc';
