@@ -503,6 +503,54 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
     const embed = new EmbedBuilder().setTitle(`📜 <@${u.id}> のTX`).setDescription(list).setFooter({ text: `現残高 ${bal.toLocaleString()}` });
     return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
+  if (sub === 'user') {
+    const u = i.options.getUser('user', true);
+    ensureUser(u.id);
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    const r = getReserves(u.id);
+
+    const bets = (db.prepare(`SELECT COALESCE(SUM(-delta),0) s FROM ledger WHERE discord_id=? AND reason LIKE 'bet:%'`).get(u.id) as any).s as number;
+    const wins = (db.prepare(`SELECT COALESCE(SUM(delta),0)  s FROM ledger WHERE discord_id=? AND reason LIKE 'win:%'`).get(u.id) as any).s as number;
+    const depConfirmed = db.prepare(`SELECT method, COALESCE(SUM(amount_jpy),0) s FROM deposits WHERE discord_id=? AND status='confirmed' GROUP BY method`).all(u.id) as Array<{method:string;s:number}>;
+    const wdSent = db.prepare(`SELECT method, COALESCE(SUM(amount_jpy),0) s FROM withdrawals WHERE discord_id=? AND status='sent' GROUP BY method`).all(u.id) as Array<{method:string;s:number}>;
+    const ban = db.prepare('SELECT reason, banned_at FROM user_bans WHERE discord_id=?').get(u.id) as { reason:string; banned_at:number } | undefined;
+
+    const lastTx = db.prepare(`SELECT delta, reason, ref, created_at FROM ledger WHERE discord_id=? ORDER BY id DESC LIMIT 5`).all(u.id) as Array<{delta:number;reason:string;ref:string|null;created_at:number}>;
+    const openWd = db.prepare(`SELECT id, method, amount_jpy, status, created_at FROM withdrawals WHERE discord_id=? AND status IN ('pending','sent') ORDER BY created_at DESC LIMIT 5`).all(u.id) as any[];
+    const activeSessions = sessions.listByUser(u.id);
+
+    const sum = (rows: Array<{method:string;s:number}>, m: string) => rows.find(x => x.method === m)?.s ?? 0;
+    const payload = await balanceReply(r.pp, r.ltc);
+
+    const embed = new EmbedBuilder()
+      .setTitle(`ユーザー総合ビュー`)
+      .setColor(ban ? 0xef4444 : 0xd4af37)
+      .setDescription(`<@${u.id}>  (\`${u.id}\`)` + (ban ? `\n🚫 **BAN**: ${ban.reason || '(理由なし)'} <t:${ban.banned_at}:R>` : ''))
+      .addFields(
+        { name: '累計 BET', value: `¥${bets.toLocaleString()}`, inline: true },
+        { name: '累計 WIN', value: `¥${wins.toLocaleString()}`, inline: true },
+        { name: 'ハウス収支', value: `${(bets-wins)>=0?'+':''}¥${(bets-wins).toLocaleString()}`, inline: true },
+        { name: '入金合計', value:
+          `PayPay: ¥${sum(depConfirmed,'paypay').toLocaleString()}\n` +
+          `LTC:    ¥${sum(depConfirmed,'ltc').toLocaleString()}`, inline: true },
+        { name: '出金合計 (sent)', value:
+          `PayPay: ¥${sum(wdSent,'paypay').toLocaleString()}\n` +
+          `LTC:    ¥${sum(wdSent,'ltc').toLocaleString()}`, inline: true },
+        { name: '稼働セッション', value: activeSessions.length
+          ? activeSessions.map(s => `${s.game} / bet ${s.bet.toLocaleString()}${s.mix?` (PP${s.mix.pp.toLocaleString()}+LTC${s.mix.ltc.toLocaleString()})`:''} / sid \`${s.id.slice(0,8)}\``).join('\n')
+          : '_(なし)_', inline: false },
+        { name: '直近出金', value: openWd.length
+          ? openWd.map(w => `#${w.id} ${w.status==='pending'?'🟡':'🟢'} ${w.method} ¥${w.amount_jpy.toLocaleString()} <t:${w.created_at}:R>`).join('\n')
+          : '_(なし)_', inline: false },
+        { name: '直近取引 (ledger)', value: lastTx.length
+          ? lastTx.map(t => `\`<t:${t.created_at}:t>\` ${t.delta>=0?'+':''}${t.delta.toLocaleString()} — ${t.reason}${t.ref?` (${t.ref})`:''}`).join('\n')
+          : '_(なし)_', inline: false },
+      )
+      .setFooter({ text: '/admin grant で chip 付与 · /admin ban / unban で制裁' });
+
+    return i.editReply({ embeds: [...payload.embeds, embed], files: payload.files });
+  }
+
   if (sub === 'pending') {
     const methodFilter = i.options.getString('method') as 'paypay'|'ltc'|null;
     const limit = Math.min(25, Math.max(1, i.options.getInteger('limit') ?? 10));

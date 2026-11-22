@@ -18,3 +18,8 @@ export function create(discordId: string, game: Entry['game'], state: AnyState, 
 }
 export const get = (id: string) => map.get(id);
 export const drop = (id: string) => map.delete(id);
+export function listByUser(discordId: string): Entry[] {
+  const out: Entry[] = [];
+  for (const e of map.values()) if (e.discordId === discordId) out.push(e);
+  return out;
+}
