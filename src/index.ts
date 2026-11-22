@@ -31,14 +31,21 @@ import { L } from './ui/leet.js';
 import { gameOverview, type GameKey } from './ui/overview.js';
 import * as ach from './achievements.js';
 import {
-  syncGuildAutoMod, syncAllGuilds, AUTOMOD_RULE_NAME,
+  removeGuildAutoMod, removeAutoModInAllGuilds, AUTOMOD_RULE_NAME,
   listBannedWords, addBannedWord, removeBannedWord, getExtraKeywords, BUILTIN_KEYWORDS,
 } from './moderation/automod.js';
+import { installFilter } from './moderation/filter.js';
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,       // NG ワード書き換えのため (privileged)
+  ],
   partials: [Partials.Channel],
 });
+
+installFilter(client);
 
 db.exec(`CREATE TABLE IF NOT EXISTS guild_config (
   guild_id TEXT PRIMARY KEY,
@@ -59,17 +66,14 @@ const paypayLoginFlow = new Map<string, { sess: string; label: string; phone: st
 
 client.once(Events.ClientReady, async c => {
   console.log(`[bot] online as ${c.user.tag}`);
-  try { await syncAllGuilds(c as unknown as { guilds: { cache: Map<string, any> } }, getExtraKeywords); }
-  catch (e) { console.error('[automod] initial sync failed:', (e as Error).message); }
+  // Webhook rewrite 方式に切り替えたため、旧 AutoMod ブロックルールが残っていたら削除する
+  try { await removeAutoModInAllGuilds(c as unknown as { guilds: { cache: Map<string, any> } }); }
+  catch (e) { console.error('[automod] cleanup failed:', (e as Error).message); }
 });
 
 client.on(Events.GuildCreate, async g => {
-  try {
-    const r = await syncGuildAutoMod(g, { extraKeywords: getExtraKeywords(g.id) });
-    console.log(`[automod] guildCreate ${g.id}: ${r.action}${r.reason ? ` — ${r.reason}` : ''}`);
-  } catch (e) {
-    console.error(`[automod] guildCreate ${g.id} sync failed:`, (e as Error).message);
-  }
+  // 旧ルールが入っていたら削除
+  try { await removeGuildAutoMod(g); } catch { /* best-effort */ }
 });
 
 client.on(Events.InteractionCreate, async (i) => {
@@ -136,28 +140,14 @@ async function cmdBannedWords(i: ChatInputCommandInteraction) {
     const word = i.options.getString('word', true);
     const r = addBannedWord(i.guild.id, word, i.user.id);
     if (!r.added) return i.reply({ content: `⚠️ 追加失敗: ${r.reason}`, flags: MessageFlags.Ephemeral });
-    await i.deferReply({ flags: MessageFlags.Ephemeral });
-    try {
-      const sr = await syncGuildAutoMod(i.guild, { extraKeywords: getExtraKeywords(i.guild.id) });
-      const note = sr.action === 'skipped' ? ` (⚠️ 同期スキップ: ${sr.reason})` : ` — AutoMod ${sr.action}`;
-      return i.editReply(`✅ \`${word}\` を追加しました${note}`);
-    } catch (e: any) {
-      return i.editReply(`✅ \`${word}\` を DB に追加 / ❌ AutoMod 同期失敗: ${e.message}`);
-    }
+    return i.reply({ content: `✅ \`${word}\` を NG ワードに追加しました (次の投稿から即反映、伏字化されます)`, flags: MessageFlags.Ephemeral });
   }
 
   if (sub === 'remove') {
     const word = i.options.getString('word', true);
     const ok = removeBannedWord(i.guild.id, word);
     if (!ok) return i.reply({ content: `⚠️ \`${word}\` は登録されていません`, flags: MessageFlags.Ephemeral });
-    await i.deferReply({ flags: MessageFlags.Ephemeral });
-    try {
-      const sr = await syncGuildAutoMod(i.guild, { extraKeywords: getExtraKeywords(i.guild.id) });
-      const note = sr.action === 'skipped' ? ` (⚠️ 同期スキップ: ${sr.reason})` : ` — AutoMod ${sr.action}`;
-      return i.editReply(`🗑️ \`${word}\` を削除しました${note}`);
-    } catch (e: any) {
-      return i.editReply(`🗑️ \`${word}\` を DB から削除 / ❌ AutoMod 同期失敗: ${e.message}`);
-    }
+    return i.reply({ content: `🗑️ \`${word}\` を NG ワードから削除しました`, flags: MessageFlags.Ephemeral });
   }
 
   if (sub === 'list') {
@@ -501,13 +491,14 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
     if (!i.guild) return i.reply({ content: 'ギルド内で実行してください', flags: MessageFlags.Ephemeral });
     await i.deferReply({ flags: MessageFlags.Ephemeral });
     try {
-      const r = await syncGuildAutoMod(i.guild, { extraKeywords: getExtraKeywords(i.guild.id) });
-      const msg = r.action === 'skipped'
-        ? `⚠️ スキップ: ${r.reason}`
-        : `✅ AutoMod rule \`${AUTOMOD_RULE_NAME}\` を ${r.action} しました${r.ruleId ? ` (id: ${r.ruleId})` : ''}`;
-      return i.editReply(msg);
+      const removed = await removeGuildAutoMod(i.guild);
+      return i.editReply(
+        removed
+          ? `✅ 旧 AutoMod rule \`${AUTOMOD_RULE_NAME}\` を削除しました。NG 語は Webhook 書き換え方式で処理されます。`
+          : `ℹ️ 削除対象なし (すでに Webhook 書き換え方式のみ有効)`
+      );
     } catch (e: any) {
-      return i.editReply(`❌ AutoMod sync 失敗: ${e.message}`);
+      return i.editReply(`❌ AutoMod cleanup 失敗: ${e.message}`);
     }
   }
   if (sub === 'achievements') {

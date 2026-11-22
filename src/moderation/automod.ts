@@ -180,6 +180,32 @@ export async function syncAllGuilds(
   }
 }
 
+/**
+ * 以前に設置した AutoMod ブロックルールを削除する。Webhook rewrite 方式に切り替えると
+ * AutoMod が先に発火してメッセージが届かないため、起動時にクリーンアップする。
+ */
+export async function removeGuildAutoMod(guild: Guild): Promise<boolean> {
+  const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
+  if (!me?.permissions.has(PermissionFlagsBits.ManageGuild)) return false;
+  const rules = await guild.autoModerationRules.fetch().catch(() => null);
+  if (!rules) return false;
+  const existing = rules.find(r => r.name === AUTOMOD_RULE_NAME);
+  if (!existing) return false;
+  await existing.delete('c4sino: switched to webhook rewrite mode').catch(() => {});
+  return true;
+}
+
+export async function removeAutoModInAllGuilds(client: { guilds: { cache: Map<string, Guild> } }): Promise<void> {
+  for (const g of client.guilds.cache.values()) {
+    try {
+      const removed = await removeGuildAutoMod(g);
+      if (removed) console.log(`[automod] removed legacy rule in ${g.id} (${g.name})`);
+    } catch (e) {
+      console.warn(`[automod] remove failed in ${g.id}:`, (e as Error).message);
+    }
+  }
+}
+
 // 内蔵 + ギルド独自の語をマージ。lowercase 比較で重複排除し、1000個・60字制限に収める。
 function mergeKeywords(builtin: string[], extra: string[]): string[] {
   const seen = new Set<string>();
