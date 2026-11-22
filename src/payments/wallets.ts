@@ -157,8 +157,9 @@ export async function withPaypay<T>(wallet: Wallet, fn: (accessToken: string) =>
     return await fn(wallet.access_token);
   } catch (e: any) {
     const msg = String(e?.message ?? '');
-    if (!/login_error|401/.test(msg) || !wallet.refresh_token) throw e;
-    const r = await pp.tokenRefresh(wallet.refresh_token);
+    if (!/login_error|401/.test(msg) || !wallet.refresh_token || !wallet.access_token) throw e;
+    // paython-wrapper の token_refresh は古い access_token も必要とする
+    const r = await pp.tokenRefresh(wallet.access_token, wallet.refresh_token);
     updateTokens(wallet.id, r.access_token, r.refresh_token);
     return await fn(r.access_token);
   }

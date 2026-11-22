@@ -2175,22 +2175,25 @@ async function ltcPoll() {
 }
 setInterval(ltcPoll, 60_000);
 
-/* ────────────── PayPay keepalive ────────────── */
+/* ────────────── PayPay 定期残高同期 ────────────── */
 
-async function paypayAliveAndRefresh() {
+/** 5 分ごとに運営 PayPay ウォレットの残高を外部システムと同期する。
+ *  balance_cached はトランザクション毎に adjustCached で即時更新しているので、
+ *  この定期同期はドリフト修正用。paython-wrapper の verified API である
+ *  get_balance() のみを使う。 */
+async function paypayPeriodicSync() {
   if (!process.env.PAYPAY_SIDECAR_URL) return;
   const rows = wallets.listWallets('paypay').filter(w => w.enabled && w.access_token);
   for (const w of rows) {
     try {
-      await wallets.withPaypay(w, t => pp.alive(t));
       const b = await wallets.withPaypay(w, t => pp.walletBalance(t));
-      wallets.touchUsed(w.id, b.usable_balance);
-    } catch (e) { console.warn(`[paypay-alive] #${w.id}:`, (e as Error).message); }
+      wallets.setCached(w.id, b.usable_balance);
+    } catch (e) { console.warn(`[paypay-sync] #${w.id}:`, (e as Error).message); }
   }
   invalidateLiquidityCache();
 }
-setInterval(paypayAliveAndRefresh, 5 * 60_000);
+setInterval(paypayPeriodicSync, 5 * 60_000);
 // 起動直後にも 1 回
-setTimeout(paypayAliveAndRefresh, 10_000);
+setTimeout(paypayPeriodicSync, 10_000);
 
 client.login(process.env.DISCORD_TOKEN);

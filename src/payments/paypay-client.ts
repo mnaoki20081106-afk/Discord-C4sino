@@ -33,8 +33,12 @@ export interface LoginFinishResp {
 export const loginFinish = (session: string, url: string) =>
   call<LoginFinishResp>('/login/finish', { session, url });
 
-export const tokenRefresh = (refresh_token: string) =>
-  call<{ access_token: string; refresh_token: string }>('/token/refresh', { refresh_token });
+/**
+ * paython-wrapper の PayPay.token_refresh は access_token (期限切れでも可) が
+ * インスタンスに設定されていないと動かないため、両トークンを送る必要がある。
+ */
+export const tokenRefresh = (access_token: string, refresh_token: string) =>
+  call<{ access_token: string; refresh_token: string }>('/token/refresh', { access_token, refresh_token });
 
 export interface WalletBalance {
   money: number | null; money_light: number;
@@ -61,9 +65,6 @@ export const linkReceive = (access_token: string, code: string, passcode?: strin
 export interface CreatedLink { link: string; chat_room_id: string; order_id: string; }
 export const createLink = (access_token: string, amount: number, passcode?: string) =>
   call<CreatedLink>('/wallet/create_link', { access_token, amount, passcode });
-
-export const alive = (access_token: string) =>
-  call<{ ok: true }>('/alive', { access_token });
 
 /** PayPay 送金リンク URL / ID 抽出 */
 export function extractLinkId(input: string): string | null {

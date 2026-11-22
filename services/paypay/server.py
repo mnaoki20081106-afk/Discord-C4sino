@@ -1,16 +1,29 @@
 """
-PayPay サイドカー — paython-wrapper (wieweiwie8878-wq/paython-wrapper) を使って
+PayPay サイドカー — paython-wrapper (wieweiwie8878-wq/paython-wrapper, v3.1.0) を使って
 PayPay モバイル API を叩く。Node 側 Bot から localhost HTTP で呼ぶ。
 
+paython-wrapper の検証済 API に沿った薄いラッパのみを公開する:
+  - PayPay(phone, password, device_uuid, client_uuid, access_token, proxy)
+  - login(url_or_id) -> dict  (payload.accessToken / refreshToken が入る)
+  - token_refresh(refresh_token) -> dict  ※インスタンスに access_token が必要
+  - get_balance() -> Balance(money, money_light, all_balance, usable_balance, points, raw)
+  - get_profile() -> Profile(name, external_user_id, icon, raw)
+  - link_check(url_or_id, web_api) -> LinkInfo(sender_name, sender_external_user_id, sender_icon,
+                                               order_id, chat_room_id, amount, status, money_light,
+                                               money, has_password, raw)
+  - link_receive(url_or_id, passcode, link_info) -> dict
+  - create_link(amount, passcode, pochibukuro, theme) -> CreatedLink(link, chat_room_id, order_id, raw)
+  Exceptions: PayPayError, PayPayLoginError, PayPayNetworkError, P2PTemporaryHoldError
+
 エンドポイント:
-  POST /login/start      {phone, password}                    -> {session, needs_url: true}
-  POST /login/finish     {session, url}                       -> {access_token, refresh_token, device_uuid, external_user_id, name}
-  POST /token/refresh    {refresh_token}                      -> {access_token, refresh_token}
-  POST /wallet/balance   {access_token}                       -> {money, money_light, all_balance, usable_balance, points}
-  POST /wallet/profile   {access_token}                       -> {name, external_user_id, icon}
-  POST /link/check       {access_token?, code}                -> {amount, status, sender_name, has_password, order_id, chat_room_id}
-  POST /link/receive     {access_token, code, passcode?}      -> {ok, amount}
-  POST /alive            {access_token}                       -> {ok}
+  POST /login/start      {phone, password}                              -> {session, needs_url: true}
+  POST /login/finish     {session, url}                                 -> {access_token, refresh_token, device_uuid, external_user_id, name}
+  POST /token/refresh    {access_token, refresh_token}                  -> {access_token, refresh_token}
+  POST /wallet/balance   {access_token}                                 -> {money, money_light, all_balance, usable_balance, points}
+  POST /wallet/profile   {access_token}                                 -> {name, external_user_id, icon}
+  POST /link/check       {access_token?, code}                          -> {amount, status, sender_name, sender_external_user_id, has_password, order_id, chat_room_id}
+  POST /link/receive     {access_token, code, passcode?}                -> {ok, amount, order_id}
+  POST /wallet/create_link {access_token, amount, passcode?}            -> {link, chat_room_id, order_id}
 
 Auth: Node との通信は X-Sidecar-Secret ヘッダーで共有秘密を検証。
 """
@@ -23,9 +36,9 @@ from typing import Any
 from flask import Flask, request, jsonify
 
 try:
-    from paython_wrapper import PayPay, PayPayError, PayPayLoginError, PayPayNetworkError
+    from paython_wrapper import PayPay, PayPayError, PayPayLoginError, PayPayNetworkError, P2PTemporaryHoldError
 except ImportError:
-    sys.stderr.write("paython-wrapper not installed. Run: pip install paython-wrapper\n")
+    sys.stderr.write("paython-wrapper not installed. See https://github.com/wieweiwie8878-wq/paython-wrapper\n")
     raise
 
 SECRET = os.environ.get("SIDECAR_SECRET", "")
@@ -140,13 +153,18 @@ def login_finish():
 
 @app.post("/token/refresh")
 def token_refresh():
+    """paython-wrapper の PayPay.token_refresh はインスタンスに access_token が
+    設定されていないと PayPayLoginError を上げる。access_token (期限切れでも可) を
+    合わせて受け取ってインスタンスを構築する。"""
     j = request.get_json(force=True)
+    at = j.get("access_token")
     rt = j.get("refresh_token")
-    if not rt:
-        return _err("refresh_token required")
-    pp = PayPay(proxy=PROXY)
+    if not rt or not at:
+        return _err("access_token and refresh_token required")
+    pp = PayPay(access_token=at, proxy=PROXY)
     try:
-        pp.token_refresh(rt)
+        with _with_token_lock(at):
+            pp.token_refresh(rt)
     except PayPayLoginError as e:
         return _err(f"login_error: {e}", 401)
     except PayPayError as e:
@@ -237,6 +255,8 @@ def link_receive():
             if info.has_password and not passcode:
                 return _err("passcode required", 400)
             pp.link_receive(code, passcode=passcode)
+    except P2PTemporaryHoldError as e:
+        return _err(f"p2p_temporary_hold: {e}", 503)
     except PayPayLoginError as e:
         return _err(f"login_error: {e}", 401)
     except PayPayError as e:
@@ -264,18 +284,6 @@ def wallet_create_link():
         "chat_room_id":link.chat_room_id,
         "order_id":    link.order_id,
     })
-
-
-@app.post("/alive")
-def alive():
-    j = request.get_json(force=True)
-    at = j.get("access_token")
-    try:
-        with _with_token_lock(at):
-            _from_token(at).alive()
-    except PayPayError as e:
-        return _err(f"paypay_error: {e}", 500)
-    return jsonify({"ok": True})
 
 
 @app.get("/health")
