@@ -1,0 +1,130 @@
+{
+  "name": "discord-c4sino",
+  "runtime": "worker",
+  "provider": "mws",
+  "mws_language": "node",
+  "entrypoint": "dist/index.js",
+  "mws_env": {
+    "NODE_ENV": "production"
+  },
+  "setup": {
+    "title": "Discord C4sino",
+    "description": "Discord 上で動くカジノ Bot。PayPay/LTC で入出金、6 ゲームをパネルから起動。",
+    "fields": [
+      {
+        "key": "DISCORD_TOKEN",
+        "label": "Discord BOT Token",
+        "type": "secret",
+        "required": true,
+        "help": "Discord Developer Portal > Bot > Reset Token から取得。"
+      },
+      {
+        "key": "DISCORD_CLIENT_ID",
+        "label": "Discord Application ID",
+        "type": "text",
+        "required": true,
+        "pattern": "^\\d{17,20}$",
+        "help": "Discord Developer Portal > General Information > Application ID。"
+      },
+      {
+        "key": "DISCORD_GUILD_ID",
+        "label": "Discord Guild ID (任意)",
+        "type": "text",
+        "required": false,
+        "pattern": "^\\d{17,20}$",
+        "help": "特定のサーバーのみにスラッシュコマンドを登録する場合。省略でグローバル登録。"
+      },
+      {
+        "key": "MASTER_ENC_KEY",
+        "label": "DB 暗号化鍵",
+        "type": "secret",
+        "required": true,
+        "help": "PayPay トークン / LTC 秘密鍵の AES-256-GCM 暗号化に使用。一度決めたら絶対に変えない。失うと DB 内 secrets は復号不能。",
+        "generate": {
+          "strategy": "hex",
+          "bytes": 32
+        }
+      },
+      {
+        "key": "LTC_API_TOKEN",
+        "label": "BlockCypher API Token",
+        "type": "secret",
+        "required": true,
+        "help": "https://accounts.blockcypher.com/ で無料登録して取得。LTC 入金監視と送金に使用。",
+        "source": {
+          "title": "BlockCypher Token の取り方",
+          "steps": [
+            "https://accounts.blockcypher.com/ で登録",
+            "Dashboard の API Token をコピー"
+          ],
+          "url": "https://accounts.blockcypher.com/",
+          "link_label": "BlockCypher Dashboard"
+        }
+      }
+    ],
+    "discord": {
+      "intents": [
+        {
+          "id": "message-content-intent",
+          "label": "Message Content Intent",
+          "required": true,
+          "description": "NG ワード書き換え (Webhook rewrite) のため、ユーザー投稿本文を読む権限が必要。",
+          "path": "Discord Developer Portal > Bot > Privileged Gateway Intents"
+        }
+      ],
+      "permissions": [
+        {
+          "id": "send-messages",
+          "label": "メッセージを送信",
+          "required": true,
+          "discord_permission": "SEND_MESSAGES"
+        },
+        {
+          "id": "manage-messages",
+          "label": "メッセージの管理",
+          "required": true,
+          "description": "NG ワード書き換えで元メッセージを削除するため。",
+          "discord_permission": "MANAGE_MESSAGES"
+        },
+        {
+          "id": "manage-webhooks",
+          "label": "ウェブフックの管理",
+          "required": true,
+          "description": "NG ワード書き換えの Webhook 投稿に使用。",
+          "discord_permission": "MANAGE_WEBHOOKS"
+        },
+        {
+          "id": "embed-links",
+          "label": "埋め込みリンク",
+          "required": true,
+          "discord_permission": "EMBED_LINKS"
+        },
+        {
+          "id": "attach-files",
+          "label": "ファイルを添付",
+          "required": true,
+          "description": "ゲーム画面 (カード・リール・残高ゲージ) を画像で送るため。",
+          "discord_permission": "ATTACH_FILES"
+        },
+        {
+          "id": "use-application-commands",
+          "label": "スラッシュコマンドの使用",
+          "required": true,
+          "discord_permission": "USE_APPLICATION_COMMANDS"
+        }
+      ],
+      "checks": [
+        {
+          "id": "paypay-tokens-preloaded",
+          "label": "PayPay 運営ウォレットのログインを済ませてある",
+          "required": false,
+          "description": "MWS 上で新規ログイン (/wallet add-paypay) は AWS WAF 回避ができないため不可。ローカル開発機で 1 回ログインして DB (data/casino.db) に tokens を保存してから deploy することを推奨。"
+        }
+      ],
+      "notes": [
+        "スラッシュコマンドは初回起動後に /register を手動実行するか、起動時自動登録ロジックを呼ぶ必要があります。",
+        "LTC ホットウォレットは /wallet add-ltc で初回作成してから LTC を送金してください。"
+      ]
+    }
+  }
+}

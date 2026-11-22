@@ -66,6 +66,15 @@ const paypayLoginFlow = new Map<string, { sess: string; label: string; phone: st
 
 client.once(Events.ClientReady, async c => {
   console.log(`[bot] online as ${c.user.tag}`);
+  // スラッシュコマンドの起動時自動登録 (SKIP_COMMAND_REGISTER=1 で無効化可能)
+  if (process.env.SKIP_COMMAND_REGISTER !== '1') {
+    try {
+      const { registerSlashCommands } = await import('./register-commands.js');
+      await registerSlashCommands();
+    } catch (e) {
+      console.error('[register] auto-register failed:', (e as Error).message);
+    }
+  }
   // 平文で DB に残っている既存の secrets を暗号化 (MASTER_ENC_KEY 必須)
   try {
     wallets.migrateEncryptPlaintextSecrets();
