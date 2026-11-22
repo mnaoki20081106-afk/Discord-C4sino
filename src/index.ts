@@ -450,6 +450,17 @@ function maskPhone(p: string | null): string {
 
 /* ────────────── ADMIN ────────────── */
 
+/** モーダル入力を厳密パース: 整数のみ受付 (NaN, 小数, 文字混入はすべて null)。
+ *  許容: 先頭末尾の空白、カンマ区切り、¥ 記号。 */
+function parseStrictInt(raw: string | null | undefined): number | null {
+  if (raw == null) return null;
+  const s = raw.replace(/[,\s¥]/g, '');
+  if (!/^-?\d+$/.test(s)) return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
+  return n;
+}
+
 /** ledger の reason を人間向けに整形: 'bet:blackjack' → 'BET Blackjack' など */
 function formatReason(reason: string): string {
   const [head, ...rest] = reason.split(':');
@@ -1216,6 +1227,8 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
   ensureUser(i.user.id);
   if (bet < 10 || bet > 10000) return i.reply({ content: `${L('BET')} は 10 〜 10,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
+  // 3秒 ACK 期限対策: 外部 API 呼び出し前に defer しておく
+  if (!i.deferred && !i.replied) await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
   if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:slots');
   else txCredit(i.user.id, -bet, 'bet:slots');
 
@@ -1230,7 +1243,7 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
     below: [stripA[2] ?? stripA[0], stripB[2] ?? stripB[0], stripC[2] ?? stripC[0]],
     bet, balance: getBalance(i.user.id), payoutMult: 0, spinning: true,
   });
-  await i.reply({ files: [new AttachmentBuilder(first, { name: 's.png' })], flags: MessageFlags.Ephemeral });
+  await i.editReply({ files: [new AttachmentBuilder(first, { name: 's.png' })] });
 
   const frames: [number, number, number][] = [
     [3, 5, 7],
@@ -1316,6 +1329,7 @@ async function doRouletteSpin(
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
   if (kind === 'number' && (number === undefined || number < 0 || number > 36))
     return i.reply({ content: '数字は 0 〜 36 です', flags: MessageFlags.Ephemeral });
+  if (!i.deferred && !i.replied) await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
   if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:roulette');
   else txCredit(i.user.id, -bet, 'bet:roulette');
 
@@ -1356,10 +1370,9 @@ async function doRouletteSpin(
   };
 
   const first = await renderRoulette({ resultNumber: result, ballAngle: 0, spinning: true });
-  await i.reply({
+  await i.editReply({
     embeds: [buildRouEmbed(true, 0)],
     files: [new AttachmentBuilder(first, { name: 'r.png' })],
-    flags: MessageFlags.Ephemeral,
   });
   for (let f = 0; f < frames; f++) {
     await new Promise(r => setTimeout(r, 700));
@@ -1578,6 +1591,7 @@ async function doBaccarat(i: ModalSubmitInteraction, side: BacSide, bet: number,
   ensureUser(i.user.id);
   if (bet < 10 || bet > 50_000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
   if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
+  if (!i.deferred && !i.replied) await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
   if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:baccarat');
   else txCredit(i.user.id, -bet, 'bet:baccarat');
 
@@ -1608,7 +1622,7 @@ async function doBaccarat(i: ModalSubmitInteraction, side: BacSide, bet: number,
       { name: L('Balance'), value: `${getBalance(i.user.id).toLocaleString()}`, inline: true },
     )
     .setImage('attachment://bac.png');
-  await i.reply({ embeds: [embed], files: [file], flags: MessageFlags.Ephemeral });
+  await i.editReply({ embeds: [embed], files: [file] });
 
   if (mult > 1) await onGameSettled(i, 'baccarat', null, bet, payout);
 }
@@ -1634,6 +1648,8 @@ async function onVpButton(i: ButtonInteraction, kind: string, arg: string) {
     const st = entry.state as VPHand;
     if (kind === 'hold') {
       const idx = parseInt(arg, 10);
+      if (!Number.isInteger(idx) || idx < 0 || idx > 4)
+        return i.reply({ content: '不正な hold 指定', flags: MessageFlags.Ephemeral });
       if (st.phase === 'deal') st.held[idx] = !st.held[idx];
       return updateVpMessage(i, entry.id, entry.bet, st);
     }
@@ -1944,9 +1960,9 @@ async function onPlayButton(i: ButtonInteraction) {
 
 async function handlePlayMixSubmit(i: ModalSubmitInteraction, game: string, sub: string) {
   assertNotBanned(i.user.id);
-  const parseAmt = (key: string) => parseInt(i.fields.getTextInputValue(key).replace(/[,\s¥]/g, ''), 10);
-  const pp = parseAmt('pp'), ltc = parseAmt('ltc');
-  if (!Number.isFinite(pp) || !Number.isFinite(ltc) || pp < 0 || ltc < 0)
+  const pp  = parseStrictInt(i.fields.getTextInputValue('pp'));
+  const ltc = parseStrictInt(i.fields.getTextInputValue('ltc'));
+  if (pp === null || ltc === null || pp < 0 || ltc < 0)
     return i.reply({ content: '金額は 0 以上の整数で入力してください', flags: MessageFlags.Ephemeral });
   const total = pp + ltc;
   if (total <= 0) return i.reply({ content: 'PayPay と LTC のどちらかに 1 以上の金額を入れてください', flags: MessageFlags.Ephemeral });
@@ -1962,7 +1978,8 @@ async function handlePlayMixSubmit(i: ModalSubmitInteraction, game: string, sub:
     case 'baccarat':   return doBaccarat(i, sub as BacSide, total, mix);
     case 'roulette': {
       if (sub === 'straight') {
-        const num = parseInt(i.fields.getTextInputValue('num'), 10);
+        const num = parseStrictInt(i.fields.getTextInputValue('num'));
+        if (num === null || num < 0 || num > 36) return i.reply({ content: '数字は 0〜36 の整数で入力してください', flags: MessageFlags.Ephemeral });
         return doRouletteSpin(i, 'number', total, num, mix);
       }
       return doRouletteSpin(i, sub as RouKind, total, undefined, mix);
@@ -1987,39 +2004,43 @@ async function onModal(i: ModalSubmitInteraction) {
     return handlePlayMixSubmit(i, game, sub);
   }
   if (i.customId === 'bj:custombet') {
-    const amt = parseInt(i.fields.getTextInputValue('amt'), 10);
-    if (!Number.isFinite(amt)) return i.reply({ content: '不正な数値', flags: MessageFlags.Ephemeral });
+    const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
+    if (amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
     return startBJ(i, amt);
   }
   if (i.customId.startsWith('cr:bet:')) {
     const parts = i.customId.split(':');          // cr:bet:<sid>:<kind>
     const sid = parts[2], kind = parts[3] as CrapsBetKind;
-    const raw = i.fields.getTextInputValue('amt').replace(/[,\s¥]/g, '');
-    const amt = parseInt(raw, 10);
+    const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
+    if (amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
     return placeCrapsBet(i, sid, kind, amt);
   }
   if (i.customId.startsWith('bac:amt:')) {
     const side = i.customId.split(':')[2] as BacSide;
-    const amt  = parseInt(i.fields.getTextInputValue('amt'), 10);
+    const amt  = parseStrictInt(i.fields.getTextInputValue('amt'));
+    if (amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
     return doBaccarat(i, side, amt);
   }
   if (i.customId === 'vp:custombet') {
-    const amt = parseInt(i.fields.getTextInputValue('amt'), 10);
+    const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
+    if (amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
     return startVpSession(i, amt);
   }
   if (i.customId === 'rou:num') {
-    const num = parseInt(i.fields.getTextInputValue('num'), 10);
-    const amt = parseInt(i.fields.getTextInputValue('amt'), 10);
+    const num = parseStrictInt(i.fields.getTextInputValue('num'));
+    const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
+    if (num === null || amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
     return doRouletteSpin(i, 'number', amt, num);
   }
   if (i.customId.startsWith('rou:amt:')) {
     const kind = i.customId.split(':')[2] as RouKind;
-    const amt  = parseInt(i.fields.getTextInputValue('amt'), 10);
+    const amt  = parseStrictInt(i.fields.getTextInputValue('amt'));
+    if (amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
     return doRouletteSpin(i, kind, amt);
   }
   if (i.customId === 'slot:custombet') {
-    const amt = parseInt(i.fields.getTextInputValue('amt'), 10);
-    if (!Number.isFinite(amt)) return i.reply({ content: '不正な数値', flags: MessageFlags.Ephemeral });
+    const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
+    if (amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
     return doSpin(i, amt);
   }
   if (i.customId === 'dep:ltc') {
@@ -2045,7 +2066,8 @@ async function onModal(i: ModalSubmitInteraction) {
   }
   if (i.customId === 'wd:paypay') {
     assertNotBanned(i.user.id);
-    const amt = parseInt(i.fields.getTextInputValue('amt').replace(/[,\s¥]/g, ''), 10);
+    const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
+    if (amt === null) return i.reply({ content: '金額は整数で入力してください', flags: MessageFlags.Ephemeral });
     const pin = i.fields.getTextInputValue('pin').trim() || undefined;
     await i.deferReply({ flags: MessageFlags.Ephemeral });
     try {
@@ -2058,7 +2080,8 @@ async function onModal(i: ModalSubmitInteraction) {
   }
   if (i.customId === 'wd:ltc') {
     assertNotBanned(i.user.id);
-    const amt  = parseInt(i.fields.getTextInputValue('amt').replace(/[,\s¥]/g, ''), 10);
+    const amt  = parseStrictInt(i.fields.getTextInputValue('amt'));
+    if (amt === null) return i.reply({ content: '金額は整数で入力してください', flags: MessageFlags.Ephemeral });
     const addr = i.fields.getTextInputValue('addr').trim();
     await i.deferReply({ flags: MessageFlags.Ephemeral });
     try {
