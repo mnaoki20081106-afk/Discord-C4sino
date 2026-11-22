@@ -5,6 +5,30 @@ import { db } from '../db/schema.js';
 import * as secp from '@noble/secp256k1';
 import { hmac } from '@noble/hashes/hmac';
 import { sha256 } from '@noble/hashes/sha256';
+import { ripemd160 } from '@noble/hashes/ripemd160';
+import { randomBytes } from 'node:crypto';
+import { encryptSecret } from './crypto.js';
+
+/** ローカルで LTC P2PKH アドレス (version 0x30 = L...) + priv/pub を生成。BlockCypher を一切介さない。 */
+function generateLocalLtcKeypair(): { address: string; priv: string; pub: string } {
+  const B58 = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const b58enc = (bytes: Uint8Array): string => {
+    let n = 0n;
+    for (const b of bytes) n = n * 256n + BigInt(b);
+    let out = '';
+    while (n > 0n) { out = B58[Number(n % 58n)] + out; n /= 58n; }
+    for (const b of bytes) { if (b === 0) out = '1' + out; else break; }
+    return out;
+  };
+  const toHex = (u: Uint8Array) => Array.from(u, b => b.toString(16).padStart(2, '0')).join('');
+  const priv = randomBytes(32);
+  const pub = secp.getPublicKey(priv, true);
+  const rip = ripemd160(sha256(pub));
+  const versioned = new Uint8Array(21); versioned[0] = 0x30; versioned.set(rip, 1);
+  const chk = sha256(sha256(versioned)).slice(0, 4);
+  const full = new Uint8Array(25); full.set(versioned, 0); full.set(chk, 21);
+  return { address: b58enc(full), priv: toHex(priv), pub: toHex(pub) };
+}
 
 // @noble/secp256k1 v2 (同期 API) は HMAC-SHA256 をユーザーが登録する必要がある
 (secp as any).etc.hmacSha256Sync = (k: Uint8Array, ...m: Uint8Array[]) =>
@@ -15,16 +39,12 @@ const API = 'https://api.blockcypher.com/v1/ltc/main';
 export async function getOrCreateAddress(discordId: string): Promise<string> {
   const existing = db.prepare('SELECT address FROM ltc_addresses WHERE discord_id = ?').get(discordId) as { address: string } | undefined;
   if (existing) return existing.address;
-
-  // ホットウォレット運用。鍵は外部KMS推奨。ここではデモとして BlockCypher の address 生成を利用。
-  const token = process.env.LTC_API_TOKEN;
-  if (!token) throw new Error('LTC_API_TOKEN not set');
-  const res = await fetch(`${API}/addrs?token=${token}`, { method: 'POST' });
-  if (!res.ok) throw new Error(`BlockCypher addrs: ${res.status}`);
-  const j = await res.json() as { address: string; private: string; public: string };
+  // 鍵はローカル生成のみ。BlockCypher にも他のサービスにも priv は渡らない。
+  const g = generateLocalLtcKeypair();
+  const derivation = encryptSecret(JSON.stringify({ priv: g.priv, pub: g.pub }));
   db.prepare('INSERT INTO ltc_addresses(discord_id, address, derivation) VALUES (?,?,?)')
-    .run(discordId, j.address, JSON.stringify({ priv: j.private, pub: j.public }));
-  return j.address;
+    .run(discordId, g.address, derivation);
+  return g.address;
 }
 
 export interface ConfirmedTx { txid: string; value_ltc: number; }
@@ -167,12 +187,7 @@ function bytesToHex(b: Uint8Array): string {
   return Array.from(b).map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
-/** BlockCypher で新規アドレス + 秘密鍵ペアを生成 (HOT ウォレット用). */
+/** ローカル生成の新規アドレス + 秘密鍵ペア (HOT ウォレット用)。BlockCypher 等に priv は渡らない。 */
 export async function generateLtcHotAddress(): Promise<{ address: string; priv: string; pub: string }> {
-  const token = process.env.LTC_API_TOKEN;
-  if (!token) throw new Error('LTC_API_TOKEN not set');
-  const r = await fetch(`${API}/addrs?token=${token}`, { method: 'POST' });
-  if (!r.ok) throw new Error(`addrs ${r.status}`);
-  const j = await r.json() as { address: string; private: string; public: string };
-  return { address: j.address, priv: j.private, pub: j.public };
+  return generateLocalLtcKeypair();
 }

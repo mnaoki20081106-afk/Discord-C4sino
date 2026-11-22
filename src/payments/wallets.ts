@@ -1,5 +1,16 @@
 import { db } from '../db/schema.js';
 import * as pp from './paypay-client.js';
+import { encryptSecret, decryptSecret, isEncrypted } from './crypto.js';
+
+// 内部ヘルパ: SQL から出てきた row の秘密フィールドを復号して返す
+function decryptWalletRow(w: Wallet): Wallet {
+  return {
+    ...w,
+    access_token:  w.access_token  ? decryptSecret(w.access_token) : null,
+    refresh_token: w.refresh_token ? decryptSecret(w.refresh_token) : null,
+    derivation:    w.derivation    ? decryptSecret(w.derivation) : null,
+  };
+}
 
 export interface Wallet {
   id: number;
@@ -23,17 +34,19 @@ export interface Wallet {
 export function listWallets(kind?: 'paypay'|'ltc'): Wallet[] {
   const where = kind ? 'WHERE kind=?' : '';
   const stmt = db.prepare(`SELECT * FROM wallets ${where} ORDER BY id`);
-  return (kind ? stmt.all(kind) : stmt.all()) as Wallet[];
+  const rows = (kind ? stmt.all(kind) : stmt.all()) as Wallet[];
+  return rows.map(decryptWalletRow);
 }
 
 export function getWallet(id: number): Wallet | undefined {
-  return db.prepare('SELECT * FROM wallets WHERE id=?').get(id) as Wallet | undefined;
+  const r = db.prepare('SELECT * FROM wallets WHERE id=?').get(id) as Wallet | undefined;
+  return r ? decryptWalletRow(r) : undefined;
 }
 
 export function addLtcWallet(ownerId: string, label: string, address: string, derivation?: string): number {
   const s = db.prepare(`INSERT INTO wallets(kind,label,enabled,address,derivation,owner_id)
     VALUES ('ltc',?,1,?,?,?)`);
-  return s.run(label, address, derivation ?? null, ownerId).lastInsertRowid as number;
+  return s.run(label, address, derivation ? encryptSecret(derivation) : null, ownerId).lastInsertRowid as number;
 }
 
 export interface LtcHotKey { priv: string; pub: string; address?: string; }
@@ -41,8 +54,9 @@ export interface LtcHotKey { priv: string; pub: string; address?: string; }
 export function listLtcHotWallets(): Array<Wallet & { key: LtcHotKey }> {
   const rows = db.prepare(`SELECT * FROM wallets WHERE kind='ltc' AND enabled=1 AND derivation IS NOT NULL`).all() as Wallet[];
   const out: Array<Wallet & { key: LtcHotKey }> = [];
-  for (const w of rows) {
+  for (const raw of rows) {
     try {
+      const w = decryptWalletRow(raw);
       const d = JSON.parse(w.derivation!);
       if (d && d.priv && d.pub) out.push({ ...w, key: d });
     } catch { /* skip malformed */ }
@@ -53,7 +67,10 @@ export function listLtcHotWallets(): Array<Wallet & { key: LtcHotKey }> {
 export function addPaypayWallet(ownerId: string, label: string, phone: string, tokens: pp.LoginFinishResp): number {
   const s = db.prepare(`INSERT INTO wallets(kind,label,enabled,phone,access_token,refresh_token,device_uuid,external_user_id,display_name,owner_id)
     VALUES ('paypay',?,1,?,?,?,?,?,?,?)`);
-  return s.run(label, phone, tokens.access_token, tokens.refresh_token, tokens.device_uuid, tokens.external_user_id, tokens.name, ownerId).lastInsertRowid as number;
+  return s.run(label, phone,
+    encryptSecret(tokens.access_token),
+    encryptSecret(tokens.refresh_token),
+    tokens.device_uuid, tokens.external_user_id, tokens.name, ownerId).lastInsertRowid as number;
 }
 
 export function setEnabled(id: number, enabled: boolean): boolean {
@@ -87,7 +104,39 @@ export function setCached(id: number, balance: number) {
 }
 
 export function updateTokens(id: number, access: string, refresh: string) {
-  db.prepare('UPDATE wallets SET access_token=?, refresh_token=? WHERE id=?').run(access, refresh, id);
+  db.prepare('UPDATE wallets SET access_token=?, refresh_token=? WHERE id=?')
+    .run(encryptSecret(access), encryptSecret(refresh), id);
+}
+
+/** 起動時: 平文のまま残っている既存の token / derivation を暗号化する (migration)。 */
+export function migrateEncryptPlaintextSecrets() {
+  const rows = db.prepare('SELECT id, access_token, refresh_token, derivation FROM wallets').all() as Array<{ id: number; access_token: string|null; refresh_token: string|null; derivation: string|null }>;
+  let migrated = 0;
+  for (const r of rows) {
+    const updates: string[] = [];
+    const vals: any[] = [];
+    if (r.access_token && !isEncrypted(r.access_token))   { updates.push('access_token=?');  vals.push(encryptSecret(r.access_token)); }
+    if (r.refresh_token && !isEncrypted(r.refresh_token)) { updates.push('refresh_token=?'); vals.push(encryptSecret(r.refresh_token)); }
+    if (r.derivation && !isEncrypted(r.derivation))       { updates.push('derivation=?');    vals.push(encryptSecret(r.derivation)); }
+    if (updates.length) {
+      db.prepare(`UPDATE wallets SET ${updates.join(', ')} WHERE id=?`).run(...vals, r.id);
+      migrated++;
+    }
+  }
+  if (migrated) console.log(`[crypto] migrated ${migrated} wallet row(s) to encrypted-at-rest`);
+}
+
+/** ltc_addresses.derivation も同じく暗号化へ移行 */
+export function migrateEncryptLtcAddressDerivations() {
+  const rows = db.prepare('SELECT discord_id, derivation FROM ltc_addresses').all() as Array<{ discord_id: string; derivation: string }>;
+  let migrated = 0;
+  for (const r of rows) {
+    if (r.derivation && !isEncrypted(r.derivation)) {
+      db.prepare('UPDATE ltc_addresses SET derivation=? WHERE discord_id=?').run(encryptSecret(r.derivation), r.discord_id);
+      migrated++;
+    }
+  }
+  if (migrated) console.log(`[crypto] migrated ${migrated} ltc_address row(s) to encrypted-at-rest`);
 }
 
 /**

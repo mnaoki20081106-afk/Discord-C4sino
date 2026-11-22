@@ -66,6 +66,13 @@ const paypayLoginFlow = new Map<string, { sess: string; label: string; phone: st
 
 client.once(Events.ClientReady, async c => {
   console.log(`[bot] online as ${c.user.tag}`);
+  // 平文で DB に残っている既存の secrets を暗号化 (MASTER_ENC_KEY 必須)
+  try {
+    wallets.migrateEncryptPlaintextSecrets();
+    wallets.migrateEncryptLtcAddressDerivations();
+  } catch (e) {
+    console.error('[crypto] migration failed:', (e as Error).message);
+  }
   // Webhook rewrite 方式に切り替えたため、旧 AutoMod ブロックルールが残っていたら削除する
   try { await removeAutoModInAllGuilds(c as unknown as { guilds: { cache: Map<string, any> } }); }
   catch (e) { console.error('[automod] cleanup failed:', (e as Error).message); }
@@ -375,6 +382,7 @@ async function cmdWallet(i: ChatInputCommandInteraction) {
     try {
       const { generateLtcHotAddress } = await import('./payments/ltc.js');
       const g = await generateLtcHotAddress();
+      // derivation は wallets.addLtcWallet 側で encryptSecret される
       const derivation = JSON.stringify({ priv: g.priv, pub: g.pub });
       const id = wallets.addLtcWallet(i.user.id, label, g.address, derivation);
       const embed = new EmbedBuilder()
