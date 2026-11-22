@@ -100,6 +100,7 @@ async function onCommand(i: ChatInputCommandInteraction) {
     case 'withdraw': return cmdWithdraw(i);
     case 'overview': return cmdOverview(i);
     case 'banned-words': return cmdBannedWords(i);
+    case 'paypay':       return cmdPaypay(i);
     case 'blackjack':  return installPlayPanel(i, 'blackjack');
     case 'slots':      return installPlayPanel(i, 'slots');
     case 'roulette':   return installPlayPanel(i, 'roulette');
@@ -229,6 +230,109 @@ async function cmdBalance(i: ChatInputCommandInteraction) {
   const r = getReserves(i.user.id);
   const payload = await balanceReply(r.pp, r.ltc);
   await i.reply({ ...payload, flags: MessageFlags.Ephemeral });
+}
+
+/* ────────────── /paypay (admin direct ops) ────────────── */
+
+async function cmdPaypay(i: ChatInputCommandInteraction) {
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
+  const sub = i.options.getSubcommand();
+
+  if (sub === 'login') {
+    const label = i.options.getString('label', true);
+    const modal = new ModalBuilder().setCustomId(`wallet:paypay:start:${encodeURIComponent(label)}`).setTitle('PayPay ログイン')
+      .addComponents(
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder().setCustomId('phone').setLabel('電話番号 (ハイフン可)').setStyle(TextInputStyle.Short).setRequired(true)),
+        new ActionRowBuilder<TextInputBuilder>().addComponents(
+          new TextInputBuilder().setCustomId('password').setLabel('PayPay パスワード').setStyle(TextInputStyle.Short).setRequired(true)),
+      );
+    return i.showModal(modal);
+  }
+
+  if (sub === 'balance') {
+    const rows = wallets.listWallets('paypay');
+    if (!rows.length) return i.reply({ content: 'PayPay ウォレット未登録', flags: MessageFlags.Ephemeral });
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+    const lines: string[] = [];
+    let total = 0;
+    for (const w of rows) {
+      const flag = w.enabled ? '🟢' : '⚪';
+      if (!w.access_token) { lines.push(`${flag} **#${w.id}** \`${w.label}\` — 未ログイン`); continue; }
+      try {
+        const b = await wallets.withPaypay(w, t => pp.walletBalance(t));
+        wallets.touchUsed(w.id, b.usable_balance);
+        total += b.usable_balance;
+        lines.push(`${flag} **#${w.id}** \`${w.label}\` (${w.display_name ?? '-'})\n` +
+          `    usable: **¥${b.usable_balance.toLocaleString()}** / all: ¥${b.all_balance.toLocaleString()} / pt: ${b.points}`);
+      } catch (e: any) {
+        lines.push(`${flag} **#${w.id}** \`${w.label}\` — ❌ ${e.message}`);
+      }
+    }
+    const embed = new EmbedBuilder()
+      .setTitle('PayPay ウォレット残高')
+      .setColor(0xd4af37)
+      .setDescription(lines.join('\n\n'))
+      .setFooter({ text: `合計 usable: ¥${total.toLocaleString()}` });
+    invalidateLiquidityCache();
+    return i.editReply({ embeds: [embed] });
+  }
+
+  if (sub === 'transfer') {
+    const amount = i.options.getInteger('amount', true);
+    const walletId = i.options.getInteger('wallet');
+    const passcode = i.options.getString('passcode')?.trim() || undefined;
+    if (amount < 1) return i.reply({ content: '金額は 1 円以上', flags: MessageFlags.Ephemeral });
+
+    await i.deferReply({ flags: MessageFlags.Ephemeral });
+
+    // ウォレット選択: 指定があればそれを、無ければ balance_cached が足りる最も残量が多いものを
+    let w: ReturnType<typeof wallets.getWallet> | undefined;
+    if (walletId !== null) {
+      w = wallets.getWallet(walletId);
+      if (!w || w.kind !== 'paypay') return i.editReply(`❌ wallet #${walletId} は PayPay ウォレットではありません`);
+      if (!w.enabled) return i.editReply(`❌ wallet #${walletId} は無効化されています`);
+    } else {
+      const candidates = wallets.listWallets('paypay')
+        .filter(x => x.enabled && x.access_token && (x.balance_cached ?? 0) >= amount)
+        .sort((a, b) => (b.balance_cached ?? 0) - (a.balance_cached ?? 0));
+      w = candidates[0];
+      if (!w) return i.editReply(`❌ ¥${amount.toLocaleString()} を送れるウォレットがありません (残高キャッシュ未更新の可能性: /paypay balance で更新)`);
+    }
+
+    const row = db.prepare(`INSERT INTO operator_payouts(admin_id, wallet_id, amount_jpy, passcode, status)
+      VALUES (?, ?, ?, ?, 'pending')`).run(i.user.id, w.id, amount, passcode ?? null);
+    const opId = row.lastInsertRowid as number;
+
+    let link;
+    try {
+      link = await wallets.withPaypay(w, t => pp.createLink(t, amount, passcode));
+    } catch (e: any) {
+      db.prepare('UPDATE operator_payouts SET status="failed", reason=?, completed_at=strftime("%s","now") WHERE id=?')
+        .run(e.message, opId);
+      return i.editReply(`❌ 送金リンク生成失敗: ${e.message}`);
+    }
+
+    db.prepare(`UPDATE operator_payouts SET status='sent', link_url=?, order_id=?, completed_at=strftime('%s','now') WHERE id=?`)
+      .run(link.link, link.order_id, opId);
+    const newBal = Math.max(0, (w.balance_cached ?? 0) - amount);
+    wallets.touchUsed(w.id, newBal);
+    invalidateLiquidityCache();
+
+    const embed = new EmbedBuilder()
+      .setTitle(`PayPay 送金リンク (運営引き出し) #${opId}`)
+      .setColor(0x22c55e)
+      .setDescription('PayPay アプリでこのリンクを開くと受け取れます。**チップ残高や user 出金には影響しません**。')
+      .addFields(
+        { name: 'From wallet', value: `#${w.id} \`${w.label}\``, inline: true },
+        { name: 'Amount', value: `¥${amount.toLocaleString()}`, inline: true },
+        ...(passcode ? [{ name: 'Passcode', value: `\`${passcode}\``, inline: true }] : []),
+        { name: 'Link', value: link.link, inline: false },
+      )
+      .setFooter({ text: '7 日以内に受取ってください / 受取側アカウントが同じでも OK' });
+    return i.editReply({ embeds: [embed] });
+  }
 }
 
 /* ────────────── WALLET ADMIN ────────────── */

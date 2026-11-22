@@ -121,6 +121,22 @@ CREATE TABLE IF NOT EXISTS withdrawals (
 CREATE INDEX IF NOT EXISTS idx_withdrawals_user   ON withdrawals(discord_id, status);
 CREATE INDEX IF NOT EXISTS idx_withdrawals_status ON withdrawals(status);
 
+-- 運営引き出し (operator payout) 監査ログ: 利益受取用送金リンクの履歴
+CREATE TABLE IF NOT EXISTS operator_payouts (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  admin_id    TEXT NOT NULL,
+  wallet_id   INTEGER NOT NULL,
+  amount_jpy  INTEGER NOT NULL,
+  passcode    TEXT,
+  link_url    TEXT,
+  order_id    TEXT,
+  status      TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','sent','failed')),
+  reason      TEXT,
+  created_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  completed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_opayouts_admin ON operator_payouts(admin_id);
+
 -- 実績 (当選記録)
 CREATE TABLE IF NOT EXISTS achievements (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

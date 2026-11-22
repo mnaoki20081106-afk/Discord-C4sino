@@ -118,8 +118,20 @@ const baccaratCmd   = gamePanel('baccarat',   'Baccarat');
 const videopokerCmd = gamePanel('videopoker', 'Video Poker');
 const crapsCmd      = gamePanel('craps',      'Craps');
 
+const paypay = new SlashCommandBuilder()
+  .setName('paypay')
+  .setDescription('PayPay 直接操作 (管理者)')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString())
+  .addSubcommand(s => s.setName('login').setDescription('PayPay アカウントでログインしてウォレット追加')
+    .addStringOption(o => o.setName('label').setDescription('識別名 (例: main)').setRequired(true)))
+  .addSubcommand(s => s.setName('balance').setDescription('登録済み PayPay ウォレットの残高を一覧'))
+  .addSubcommand(s => s.setName('transfer').setDescription('運営利益受取用の送金リンクを生成')
+    .addIntegerOption(o => o.setName('amount').setDescription('送金額 (JPY)').setRequired(true).setMinValue(1))
+    .addIntegerOption(o => o.setName('wallet').setDescription('送金元 wallet id (省略で自動選択)').setRequired(false))
+    .addStringOption(o => o.setName('passcode').setDescription('リンクのパスコード (省略可、推奨)').setRequired(false)));
+
 const commands = [
-  setup, balance, overview, pay, withdraw, wallet, admin, bannedWords,
+  setup, balance, overview, pay, withdraw, wallet, admin, bannedWords, paypay,
   blackjackCmd, slotsCmd, rouletteCmd, baccaratCmd, videopokerCmd, crapsCmd,
 ].map(c => c.toJSON());
 
