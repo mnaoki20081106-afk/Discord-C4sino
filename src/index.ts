@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import {
-  Client, GatewayIntentBits, Partials, ModalBuilder,
+  Client, GatewayIntentBits, Partials, AttachmentBuilder, ModalBuilder,
   TextInputBuilder, TextInputStyle, ActionRowBuilder, Events, PermissionFlagsBits,
   EmbedBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteraction,
   ButtonInteraction, ModalSubmitInteraction, StringSelectMenuInteraction, MessageFlags,
@@ -702,7 +702,7 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
       )
       .setFooter({ text: '詳細履歴は /admin history user:... · chip 付与は /admin grant · 制裁は /admin ban / unban' });
 
-    return i.editReply({ embeds: [...payload.embeds, embed] });
+    return i.editReply({ embeds: [...payload.embeds, embed], files: payload.files });
   }
 
   if (sub === 'pending') {

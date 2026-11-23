@@ -648,7 +648,7 @@ async function cmdAdmin(i) {
                 ? lastTx.map(t => `\`<t:${t.created_at}:f>\` ${formatLedgerLine(t.delta, t.reason, t.ref)}`).join('\n').slice(0, 1024)
                 : '_(なし)_', inline: false })
             .setFooter({ text: '詳細履歴は /admin history user:... · chip 付与は /admin grant · 制裁は /admin ban / unban' });
-        return i.editReply({ embeds: [...payload.embeds, embed] });
+        return i.editReply({ embeds: [...payload.embeds, embed], files: payload.files });
     }
     if (sub === 'pending') {
         const methodFilter = i.options.getString('method');

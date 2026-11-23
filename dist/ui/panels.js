@@ -1,7 +1,7 @@
-import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } from 'discord.js';
+import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } from 'discord.js';
 import { L } from './leet.js';
 import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY } from '../payments/limits.js';
-import { formatBalanceText } from './render-balance.js';
+import { renderBalance } from './render-balance.js';
 export function blackjackPanel() {
     const embed = new EmbedBuilder()
         .setTitle(`🂡  ${L('BLACKJACK')} ${L('TABLE')}  🂱`)
@@ -221,17 +221,17 @@ export function crapsPlayPanel() {
     return { embeds: [embed], components: [row] };
 }
 /**
- * 残高カード (テキストゲージ embed)。/balance と Cashier パネルの残高確認で使用。
+ * 残高カード (画像 embed)。/balance と Cashier パネルの残高確認で使用。
  * 返り値をそのまま interaction.reply に展開できる形で返す。
  */
 export async function balanceReply(pp, ltc, note) {
-    const gauge = formatBalanceText({ pp, ltc, note });
-    const desc = '```\n' + gauge + '\n```' + (note ? `\n${note}` : '');
+    const png = await renderBalance({ pp, ltc, note });
+    const file = new AttachmentBuilder(png, { name: 'balance.png' });
     const embed = new EmbedBuilder()
         .setColor(0xd4af37)
-        .setDescription(desc)
+        .setImage('attachment://balance.png')
         .setFooter({ text: '入金したレール分だけ、そのレールで出金できます' });
-    return { embeds: [embed] };
+    return { embeds: [embed], files: [file] };
 }
 export function depositPanel() {
     const embed = new EmbedBuilder()
