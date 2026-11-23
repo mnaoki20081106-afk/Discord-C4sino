@@ -1,7 +1,7 @@
 // 各ゲームの画面を "テキスト + Application Emoji" 文字列で組み立てるフォーマッタ。
 // Application Emoji の ID は src/ui/emoji-ids.ts に (アップロード後に) 生成される。
 // 未アップロード時は emoji() が空文字を返すので、テキスト部分だけで表示が成立する。
-import { emoji } from './emoji-ids.js';
+import { emoji, EMOJI_IDS } from './emoji-ids.js';
 const SUIT_NAME = { S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
 const RANK_NAME = (r) => {
     if (r === 'A')
@@ -12,6 +12,8 @@ const RANK_NAME = (r) => {
         return 'q';
     if (r === 'K')
         return 'k';
+    if (r === 'T')
+        return '10'; // デッキ上の 10 は 'T'、絵文字名は card_*_10
     return String(r);
 };
 function cardEmoji(card) {
@@ -19,9 +21,18 @@ function cardEmoji(card) {
         return emoji('card_back') || '🂠';
     const name = `card_${SUIT_NAME[card.suit]}_${RANK_NAME(card.rank)}`;
     // Fallback: emoji 未登録時は "A♠" 等のテキスト
-    return emoji(name) || `${rankLabel(card.rank)}${suitGlyph(card.suit)}`;
+    return emoji(name) || cardText(card);
 }
-function rankLabel(r) { return String(r) === '10' ? '10' : String(r); }
+/** ボタンに付けるカード絵文字。未登録なら null。 */
+export function cardButtonEmoji(card) {
+    const name = `card_${SUIT_NAME[card.suit]}_${RANK_NAME(card.rank)}`;
+    const id = EMOJI_IDS[name];
+    return id ? { id, name } : null;
+}
+export function cardText(card) {
+    return `${rankLabel(card.rank)}${suitGlyph(card.suit)}`;
+}
+function rankLabel(r) { return r === 'T' ? '10' : String(r); }
 function suitGlyph(s) { return ({ S: '♠', H: '♥', D: '♦', C: '♣' })[s]; }
 function row(cards) {
     return cards.map(cardEmoji).join(' ');

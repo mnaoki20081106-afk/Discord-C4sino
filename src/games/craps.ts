@@ -30,6 +30,7 @@ export interface CrapsBet {
   kind: CrapsBetKind;
   amount: number;
   point?: number;    // come/dontcome の確立済みポイント
+  mix?: { pp: number; ltc: number };  // この BET を PayPay / LTC 由来からいくらずつ出したか
 }
 
 export interface CrapsState {
@@ -47,8 +48,8 @@ export function newCraps(): CrapsState {
   return { phase: 'comeout', nextBetId: 1, bets: [], history: [], totalWagered: 0, totalReturned: 0 };
 }
 
-export function addBet(st: CrapsState, kind: CrapsBetKind, amount: number): CrapsBet {
-  const b: CrapsBet = { id: st.nextBetId++, kind, amount };
+export function addBet(st: CrapsState, kind: CrapsBetKind, amount: number, mix?: { pp: number; ltc: number }): CrapsBet {
+  const b: CrapsBet = { id: st.nextBetId++, kind, amount, mix };
   st.bets.push(b);
   st.totalWagered += amount;
   return b;

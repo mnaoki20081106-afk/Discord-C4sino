@@ -3,6 +3,7 @@ import { L } from './leet.js';
 import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY } from '../payments/limits.js';
 import { renderBalance } from './render-balance.js';
 import { formatRemaining, elapsedRatio } from '../mws/timer.js';
+import { cardButtonEmoji, cardText } from './format-games.js';
 export function blackjackPanel() {
     const embed = new EmbedBuilder()
         .setTitle(`🂡  ${L('BLACKJACK')} ${L('TABLE')}  🂱`)
@@ -70,13 +71,19 @@ export function videopokerPanel() {
     const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('vp:deal:100').setLabel(`DEAL 100`).setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId('vp:deal:500').setLabel(`DEAL 500`).setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId('vp:deal:1000').setLabel(`DEAL 1,000`).setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId('vp:deal:5000').setLabel(`DEAL 5,000`).setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId('vp:deal:custom').setLabel('CUSTOM').setStyle(ButtonStyle.Success));
     return { embeds: [embed], components: [row] };
 }
-export function vpHoldRow(held) {
+export function vpHoldRow(held, cards) {
     const row1 = new ActionRowBuilder();
     for (let i = 0; i < 5; i++) {
-        row1.addComponents(new ButtonBuilder()
+        const state = held[i] ? 'HELD' : 'HOLD';
+        const btn = new ButtonBuilder()
             .setCustomId(`vp:hold:${i}`)
-            .setLabel(`${i + 1} ${held[i] ? 'HELD' : 'HOLD'}`)
-            .setStyle(held[i] ? ButtonStyle.Success : ButtonStyle.Secondary));
+            .setStyle(held[i] ? ButtonStyle.Success : ButtonStyle.Secondary);
+        const e = cards[i] ? cardButtonEmoji(cards[i]) : null;
+        if (e)
+            btn.setEmoji(e).setLabel(state);
+        else
+            btn.setLabel(cards[i] ? `${cardText(cards[i])} ${state}` : `${i + 1} ${state}`);
+        row1.addComponents(btn);
     }
     const row2 = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('vp:draw').setLabel('🎴 DRAW').setStyle(ButtonStyle.Primary));
     return [row1, row2];
@@ -216,9 +223,8 @@ export function crapsPlayPanel() {
         .setTitle(L('CRAPS'))
         .setColor(0xb45309)
         .setDescription('2 ダイスで Point / Come-out を解決。複数 BET をテーブルに置いて同時解決します。\n' +
-        '**mix BET が複雑なため、従来の `/setup game:craps` パネルから開始してください。**')
-        .setFooter({ text: 'Craps は近日 mix bet 対応予定' });
-    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary));
+        'BET ごとに PayPay 由来 / LTC 由来の金額を指定します。');
+    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cr:start').setLabel('PLAY').setStyle(ButtonStyle.Success), new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary));
     return { embeds: [embed], components: [row] };
 }
 /**

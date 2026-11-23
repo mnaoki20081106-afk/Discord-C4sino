@@ -1069,16 +1069,48 @@ function canTestPlay(i: { memberPermissions: Readonly<{ has(p: bigint): boolean 
   return i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false;
 }
 
-/** /setup パネルの BET 金額入力欄。管理者には 0 でテストプレイできることを案内する。 */
-function betAmountInput(i: Parameters<typeof canTestPlay>[0]): TextInputBuilder {
-  const input = new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true);
-  if (canTestPlay(i)) input.setPlaceholder('管理者: 0 でテストプレイ (残高は動きません)');
-  return input;
+/**
+ * 全ゲーム共通の BET 金額入力モーダル。PayPay 由来 / LTC 由来をそれぞれ入力させる。
+ * extra は金額欄の後ろに足す欄 (ルーレットの数字など)。
+ */
+function betMixModal(
+  i: ButtonInteraction | StringSelectMenuInteraction,
+  customId: string, title: string, extra: ActionRowBuilder<TextInputBuilder>[] = [],
+): ModalBuilder {
+  const r = getReserves(i.user.id);
+  const placeholder = canTestPlay(i)
+    ? '管理者: 両方 0 でテストプレイ (残高は動きません)'
+    : '0 以上の整数 (使わないなら 0)';
+  const field = (id: 'pp' | 'ltc', label: string) => new ActionRowBuilder<TextInputBuilder>().addComponents(
+    new TextInputBuilder().setCustomId(id).setLabel(label).setStyle(TextInputStyle.Short)
+      .setPlaceholder(placeholder).setValue('0').setRequired(true));
+  return new ModalBuilder().setCustomId(customId).setTitle(title).addComponents(
+    field('pp',  `PayPay 由来 (保有 ¥${r.pp.toLocaleString()})`),
+    field('ltc', `LTC 由来 (保有 ¥${r.ltc.toLocaleString()})`),
+    ...extra,
+  );
 }
 
-/** 金額入力が 0 で、かつ管理者ならテストプレイ (仮 BET) に切り替える。 */
-function resolveBet(i: Parameters<typeof canTestPlay>[0], amt: number): { bet: number; test: boolean } {
-  return amt === 0 && canTestPlay(i) ? { bet: TEST_BET, test: true } : { bet: amt, test: false };
+/**
+ * betMixModal の入力を読む。不正・残高超過ならエラーを返信して null。
+ * 管理者が両方 0 ならテストプレイ (仮 BET、mix なし)。
+ */
+async function readBetMix(i: ModalSubmitInteraction): Promise<{ bet: number; mix?: BetMix; test: boolean } | null> {
+  const pp  = parseStrictInt(i.fields.getTextInputValue('pp'));
+  const ltc = parseStrictInt(i.fields.getTextInputValue('ltc'));
+  if (pp === null || ltc === null || pp < 0 || ltc < 0) {
+    await i.reply({ content: '金額は 0 以上の整数で入力してください', flags: MessageFlags.Ephemeral });
+    return null;
+  }
+  if (pp + ltc === 0) {
+    if (canTestPlay(i)) return { bet: TEST_BET, test: true };
+    await i.reply({ content: 'PayPay と LTC のどちらかに 1 以上の金額を入れてください', flags: MessageFlags.Ephemeral });
+    return null;
+  }
+  const r = getReserves(i.user.id);
+  if (pp > r.pp)   { await i.reply({ content: `PayPay 由来が不足 (保有 ¥${r.pp.toLocaleString()})`, flags: MessageFlags.Ephemeral }); return null; }
+  if (ltc > r.ltc) { await i.reply({ content: `LTC 由来が不足 (保有 ¥${r.ltc.toLocaleString()})`, flags: MessageFlags.Ephemeral }); return null; }
+  return { bet: pp + ltc, mix: { pp, ltc }, test: false };
 }
 
 /** テストプレイでは運営残高による払戻し上限をかけない。 */
@@ -1102,11 +1134,7 @@ async function onBJButton(i: ButtonInteraction, kind: string, arg: string) {
   if (kind === 'bet') {
     assertNotBanned(i.user.id);
     if (arg === 'custom') {
-      const modal = new ModalBuilder().setCustomId('bj:custombet').setTitle(`${L('BLACKJACK')} — ${L('Custom')} ${L('Bet')}`)
-        .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
-          betAmountInput(i)
-        ));
-      return i.showModal(modal);
+      return i.showModal(betMixModal(i, 'bj:custombet', `${L('BLACKJACK')} — ${L('Custom')} ${L('Bet')}`));
     }
     return startBJ(i, parseInt(arg, 10));
   }
@@ -1331,11 +1359,7 @@ async function onSlotButton(i: ButtonInteraction, kind: string, arg: string) {
   if (kind !== 'spin') return;
   assertNotBanned(i.user.id);
   if (arg === 'custom') {
-    const modal = new ModalBuilder().setCustomId('slot:custombet').setTitle(`${L('SLOTS')} — ${L('Custom')} ${L('Bet')}`)
-      .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
-        betAmountInput(i)
-      ));
-    return i.showModal(modal);
+    return i.showModal(betMixModal(i, 'slot:custombet', `${L('SLOTS')} — ${L('Custom')} ${L('Bet')}`));
   }
   await doSpin(i, parseInt(arg, 10));
 }
@@ -1427,20 +1451,12 @@ async function onRouletteButton(i: ButtonInteraction, kind: string, arg: string)
 
 async function openRouletteAmountModal(i: ButtonInteraction | StringSelectMenuInteraction, kind: string) {
   if (kind === 'number') {
-    const modal = new ModalBuilder().setCustomId('rou:num').setTitle(`${L('ROULETTE')} — Single Number`)
-      .addComponents(
-        new ActionRowBuilder<TextInputBuilder>().addComponents(
-          new TextInputBuilder().setCustomId('num').setLabel('数字 (0〜36)').setStyle(TextInputStyle.Short).setRequired(true)),
-        new ActionRowBuilder<TextInputBuilder>().addComponents(
-          betAmountInput(i)),
-      );
-    return i.showModal(modal);
+    return i.showModal(betMixModal(i, 'rou:num', `${L('ROULETTE')} — Single Number`, [
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId('num').setLabel('数字 (0〜36)').setStyle(TextInputStyle.Short).setRequired(true)),
+    ]));
   }
-  const modal = new ModalBuilder().setCustomId(`rou:amt:${kind}`).setTitle(`${L('ROULETTE')} — ${ROU_LABEL[kind] ?? kind}`)
-    .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
-      betAmountInput(i)
-    ));
-  return i.showModal(modal);
+  return i.showModal(betMixModal(i, `rou:amt:${kind}`, `${L('ROULETTE')} — ${ROU_LABEL[kind] ?? kind}`));
 }
 
 async function doRouletteSpin(
@@ -1516,9 +1532,12 @@ async function onCrapsButton(i: ButtonInteraction, kind: string, _arg: string) {
   if (kind === 'undo') {
     const last = st.bets.pop();
     if (last) {
-      txCredit(i.user.id, last.amount, 'bet:craps:undo', sid);
+      if (!entry.test) {
+        if (last.mix) applyMix(i.user.id, last.mix.pp, last.mix.ltc, 'bet:craps:undo', sid);
+        else txCredit(i.user.id, last.amount, 'bet:craps:undo', sid);
+        setCrapsExposure(sid, openExposure(st));
+      }
       st.totalWagered -= last.amount;
-      setCrapsExposure(sid, openExposure(st));
     }
     return updateCrapsMessage(i, sid, st);
   }
@@ -1531,6 +1550,7 @@ async function onCrapsButton(i: ButtonInteraction, kind: string, _arg: string) {
       .setColor(net > 0 ? 0x22c55e : net < 0 ? 0xef4444 : 0x9ca3af)
       .setTitle(`🎲 ${L('CRAPS')} セッション終了`)
       .setDescription(`累計 ${net>=0?'+':''}${net.toLocaleString()} ${L('chips')} (賭 ${st.totalWagered.toLocaleString()} / 戻 ${st.totalReturned.toLocaleString()})`);
+    if (entry.test) markTest(embed);
     return i.update({ embeds: [embed], files: [], components: [], attachments: [] });
   }
 
@@ -1550,7 +1570,7 @@ function buildCrapsEmbed(sid: string, st: CrapsState, balance: number): EmbedBui
     ? st.bets.slice(-10).map(b => `\`#${b.id}\` ${b.kind}${b.point?`→${b.point}`:''} **${b.amount.toLocaleString()}**`).join('\n') + (st.bets.length>10?`\n…他${st.bets.length-10}件`:'')
     : '_ベットなし_';
   const histText = st.history.length ? st.history.slice(-5).join('\n') : '_まだ振られていません_';
-  return new EmbedBuilder()
+  const embed = new EmbedBuilder()
     .setTitle(`🎲 ${L('CRAPS')}`)
     .setColor(color)
     .setDescription(header)
@@ -1561,6 +1581,7 @@ function buildCrapsEmbed(sid: string, st: CrapsState, balance: number): EmbedBui
       { name: '累計', value: `${net>=0?'+':''}${net.toLocaleString()} (賭 ${st.totalWagered.toLocaleString()} / 戻 ${st.totalReturned.toLocaleString()})`, inline: true },
     )
     .setFooter({ text: `sid=${sid}` });
+  return sessions.get(sid)?.test ? markTest(embed) : embed;
 }
 
 async function sendCrapsEphemeral(i: ButtonInteraction, sid: string, st: CrapsState) {
@@ -1577,7 +1598,7 @@ async function updateCrapsMessage(i: ButtonInteraction, sid: string, st: CrapsSt
   await i.update({ embeds: [embed], files: [], components: rows, attachments: [] });
 }
 
-async function placeCrapsBet(i: ModalSubmitInteraction, sid: string, kind: CrapsBetKind, amount: number) {
+async function placeCrapsBet(i: ModalSubmitInteraction, sid: string, kind: CrapsBetKind, amount: number, mix?: BetMix, test = false) {
   assertNotBanned(i.user.id);
   const entry = sessions.get(sid);
   if (!entry || entry.discordId !== i.user.id) return i.reply({ content: 'セッションが見つかりません', flags: MessageFlags.Ephemeral });
@@ -1585,6 +1606,16 @@ async function placeCrapsBet(i: ModalSubmitInteraction, sid: string, kind: Craps
 
   if (!Number.isFinite(amount) || amount < 10 || amount > 50_000)
     return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
+
+  // テストか本番かはセッションの最初のベットで決まる。同じセッションで混ぜない。
+  if (st.totalWagered > 0 && !!entry.test !== test) {
+    return i.reply({
+      content: entry.test
+        ? 'このセッションはテストプレイ中です。本番で賭けるには [END] で終了してから始め直してください'
+        : 'このセッションは本番です。テストプレイするには [END] で終了してから始め直してください',
+      flags: MessageFlags.Ephemeral,
+    });
+  }
 
   // フェーズ制約
   if ((kind === 'pass_odds' || kind === 'dontpass_odds') && st.phase !== 'point')
@@ -1596,21 +1627,24 @@ async function placeCrapsBet(i: ModalSubmitInteraction, sid: string, kind: Craps
   if (kind === 'dontpass' && st.phase === 'point')
     return i.reply({ content: `Don't Pass は come-out 時のみ (今は Don't Come を使用)`, flags: MessageFlags.Ephemeral });
 
-  if (getBalance(i.user.id) < amount)
-    return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
-
-  txCredit(i.user.id, -amount, `bet:craps:${kind}`, sid);
-  addBet(st, kind, amount);
-  setCrapsExposure(sid, openExposure(st));
+  entry.test = test;
+  if (!test) {
+    if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, `bet:craps:${kind}`, sid);
+    else txCredit(i.user.id, -amount, `bet:craps:${kind}`, sid);
+  }
+  addBet(st, kind, amount, mix);
+  if (!test) setCrapsExposure(sid, openExposure(st));
 
   await i.deferUpdate().catch(()=>{});
+  sessions.save(sid);
   const embed = buildCrapsEmbed(sid, st, getBalance(i.user.id));
   const rows = crapsControlRows({ phase: st.phase, point: st.point, betCount: st.bets.length });
   await i.editReply({ embeds: [embed], files: [], components: rows, attachments: [] });
 }
 
 async function doCrapsRoll(i: ButtonInteraction, sid: string, st: CrapsState) {
-  const cap = await housePayoutCap(sid);
+  const test = !!sessions.get(sid)?.test;
+  const cap = test ? Number.MAX_SAFE_INTEGER : await housePayoutCap(sid);
   const report = crapsRoll(st, cap);
   st.lastRoll = [report.d1, report.d2];
   let totalPayout = 0;
@@ -1631,23 +1665,36 @@ async function doCrapsRoll(i: ButtonInteraction, sid: string, st: CrapsState) {
   if (report.phaseChange === 'pointSet') { st.phase = 'point'; st.point = report.newPoint; }
   if (report.phaseChange === 'pointHit' || report.phaseChange === 'seven_out') { st.phase = 'comeout'; st.point = undefined; }
 
-  // 残高加算 (最終 clamp)
+  // 残高加算 (最終 clamp)。各ベットの払戻しは、そのベットを出した PayPay/LTC の比率で戻す。
   if (totalPayout > 0) {
-    totalPayout = await clampPayout(totalPayout, sid);
-    if (totalPayout > 0) txCredit(i.user.id, totalPayout, 'win:craps', sid);
-    st.totalReturned += totalPayout;
+    if (test) {
+      st.totalReturned += totalPayout;
+    } else {
+      const raw = totalPayout;
+      totalPayout = await clampPayout(raw, sid);
+      let remaining = totalPayout;
+      const winners = report.resolutions.filter(r => r.payout > 0);
+      winners.forEach((r, idx) => {
+        const share = idx === winners.length - 1 ? remaining : Math.floor(r.payout * totalPayout / raw);
+        remaining -= share;
+        if (share <= 0) return;
+        if (r.bet.mix) payoutByMix(i.user.id, share, r.bet.mix, 'win:craps', sid);
+        else txCredit(i.user.id, share, 'win:craps', sid);
+      });
+      st.totalReturned += totalPayout;
+    }
   }
 
   // 履歴
   st.history.push(report.log);
   if (st.history.length > 20) st.history.shift();
 
-  setCrapsExposure(sid, openExposure(st));
+  if (!test) setCrapsExposure(sid, openExposure(st));
 
   // 当選があれば実績通知 (1 roll 内の純利 > 0 なら)
   const wagerDelta = report.resolutions.reduce((s, r) => s + (r.stay ? 0 : r.bet.amount), 0);
   const netThisRoll = totalPayout - wagerDelta;
-  if (netThisRoll > 0 && i.guildId) {
+  if (!test && netThisRoll > 0 && i.guildId) {
     await ach.announce(client, {
       guildId: i.guildId, discordId: i.user.id, game: 'craps',
       bet: wagerDelta, payout: totalPayout, net: netThisRoll,
@@ -1667,11 +1714,7 @@ async function onBaccaratButton(i: ButtonInteraction, kind: string, arg: string)
   if (kind !== 'side') return;
   assertNotBanned(i.user.id);
   const side = arg as BacSide;
-  const modal = new ModalBuilder().setCustomId(`bac:amt:${side}`).setTitle(`${L('BACCARAT')} — ${side}`)
-    .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
-      betAmountInput(i)
-    ));
-  return i.showModal(modal);
+  return i.showModal(betMixModal(i, `bac:amt:${side}`, `${L('BACCARAT')} — ${side}`));
 }
 
 async function doBaccarat(i: ModalSubmitInteraction, side: BacSide, bet: number, mix?: BetMix, test = false) {
@@ -1719,10 +1762,7 @@ async function onVpButton(i: ButtonInteraction, kind: string, arg: string) {
   assertNotBanned(i.user.id);
   if (kind === 'deal') {
     if (arg === 'custom') {
-      const modal = new ModalBuilder().setCustomId('vp:custombet').setTitle(`${L('VIDEO POKER')} — Custom Bet`)
-        .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
-          betAmountInput(i)));
-      return i.showModal(modal);
+      return i.showModal(betMixModal(i, 'vp:custombet', `${L('VIDEO POKER')} — Custom Bet`));
     }
     return startVpSession(i, parseInt(arg, 10));
   }
@@ -1817,7 +1857,7 @@ async function sendVpEphemeral(i: ButtonInteraction, sid: string, bet: number, s
   const embed = buildVpEmbed(sid, bet, getBalance(i.user.id), st);
   embed.setDescription(`${embed.data.description ?? ''}\n\n${text}`);
   if (sessions.get(sid)?.test) markTest(embed);
-  const rows = st.phase === 'deal' ? vpHoldRow(st.held) : [];
+  const rows = st.phase === 'deal' ? vpHoldRow(st.held, st.cards) : [];
   await (i as any).reply({ embeds: [embed], files: [], components: rows, flags: MessageFlags.Ephemeral });
 }
 
@@ -1831,7 +1871,7 @@ async function updateVpMessage(i: ButtonInteraction, sid: string, bet: number, s
   const embed = buildVpEmbed(sid, bet, getBalance(i.user.id), st);
   embed.setDescription(`${embed.data.description ?? ''}\n\n${text}`);
   if (sessions.get(sid)?.test) markTest(embed);
-  const rows = st.phase === 'deal' ? vpHoldRow(st.held) : [];
+  const rows = st.phase === 'deal' ? vpHoldRow(st.held, st.cards) : [];
   await i.update({ embeds: [embed], files: [], components: rows, attachments: [] });
 }
 
@@ -1892,11 +1932,7 @@ async function onSelect(i: StringSelectMenuInteraction) {
     const entry = sessions.get(sid);
     if (!entry || entry.discordId !== i.user.id) return i.reply({ content: '他ユーザーのセッションです', flags: MessageFlags.Ephemeral });
 
-    const modal = new ModalBuilder().setCustomId(`cr:bet:${sid}:${kind}`).setTitle(`${L('CRAPS')} — ${kind}`)
-      .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)
-      ));
-    return i.showModal(modal);
+    return i.showModal(betMixModal(i, `cr:bet:${sid}:${kind}`, `${L('CRAPS')} — ${kind}`));
   }
 }
 
@@ -2020,58 +2056,24 @@ async function onPlayButton(i: ButtonInteraction) {
   const parts = i.customId.split(':');
   const game = parts[1];
   const sub = parts.slice(2).join(':');
-  if (game === 'craps') {
-    return i.reply({ content: 'Craps はまだ mix BET に対応していません。`/setup game:craps` のパネルから開始してください。', flags: MessageFlags.Ephemeral });
-  }
+  if (game === 'craps') return onCrapsButton(i, 'start', '');
   const r = getReserves(i.user.id);
-  const tester = canTestPlay(i);
-  if (r.total <= 0 && !tester) {
+  if (r.total <= 0 && !canTestPlay(i)) {
     return i.reply({ content: '残高が 0 です。Cashier で入金してください。', flags: MessageFlags.Ephemeral });
   }
-  const placeholder = tester
-    ? '管理者: 両方 0 でテストプレイ (残高は動きません)'
-    : '0 以上の整数 (使わないなら 0)';
   const subId = sub ? `:${sub}` : '';
-  const modal = new ModalBuilder()
-    .setCustomId(`play-mix:${game}${subId}`)
-    .setTitle(`${game.toUpperCase()} — BET 金額`);
-  const rows: ActionRowBuilder<TextInputBuilder>[] = [
-    new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder().setCustomId('pp')
-        .setLabel(`PayPay 由来 (保有 ¥${r.pp.toLocaleString()})`)
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder(placeholder)
-        .setValue('0').setRequired(true)),
-    new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder().setCustomId('ltc')
-        .setLabel(`LTC 由来 (保有 ¥${r.ltc.toLocaleString()})`)
-        .setStyle(TextInputStyle.Short)
-        .setPlaceholder(placeholder)
-        .setValue('0').setRequired(true)),
-  ];
-  if (game === 'roulette' && sub === 'straight') {
-    rows.push(new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder().setCustomId('num')
-        .setLabel('数字 (0〜36)').setStyle(TextInputStyle.Short).setRequired(true)));
-  }
-  modal.addComponents(...rows);
-  return i.showModal(modal);
+  const extra = game === 'roulette' && sub === 'straight'
+    ? [new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder().setCustomId('num').setLabel('数字 (0〜36)').setStyle(TextInputStyle.Short).setRequired(true))]
+    : [];
+  return i.showModal(betMixModal(i, `play-mix:${game}${subId}`, `${game.toUpperCase()} — BET 金額`, extra));
 }
 
 async function handlePlayMixSubmit(i: ModalSubmitInteraction, game: string, sub: string) {
   assertNotBanned(i.user.id);
-  const pp  = parseStrictInt(i.fields.getTextInputValue('pp'));
-  const ltc = parseStrictInt(i.fields.getTextInputValue('ltc'));
-  if (pp === null || ltc === null || pp < 0 || ltc < 0)
-    return i.reply({ content: '金額は 0 以上の整数で入力してください', flags: MessageFlags.Ephemeral });
-  const total = pp + ltc;
-  const test = total === 0 && canTestPlay(i);
-  if (total <= 0 && !test) return i.reply({ content: 'PayPay と LTC のどちらかに 1 以上の金額を入れてください', flags: MessageFlags.Ephemeral });
-  const r = getReserves(i.user.id);
-  if (pp > r.pp)   return i.reply({ content: `PayPay 由来が不足 (保有 ¥${r.pp.toLocaleString()})`, flags: MessageFlags.Ephemeral });
-  if (ltc > r.ltc) return i.reply({ content: `LTC 由来が不足 (保有 ¥${r.ltc.toLocaleString()})`, flags: MessageFlags.Ephemeral });
-  const mix: BetMix | undefined = test ? undefined : { pp, ltc };
-  const bet = test ? TEST_BET : total;
+  const b = await readBetMix(i);
+  if (!b) return;
+  const { bet, mix, test } = b;
 
   switch (game) {
     case 'blackjack':  return startBJ(i, bet, mix, test);
@@ -2107,50 +2109,38 @@ async function onModal(i: ModalSubmitInteraction) {
     return handlePlayMixSubmit(i, game, sub);
   }
   if (i.customId === 'bj:custombet') {
-    const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
-    if (amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-    const b = resolveBet(i, amt);
-    return startBJ(i, b.bet, undefined, b.test);
+    const b = await readBetMix(i); if (!b) return;
+    return startBJ(i, b.bet, b.mix, b.test);
   }
   if (i.customId.startsWith('cr:bet:')) {
     const parts = i.customId.split(':');          // cr:bet:<sid>:<kind>
     const sid = parts[2], kind = parts[3] as CrapsBetKind;
-    const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
-    if (amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-    return placeCrapsBet(i, sid, kind, amt);
+    const b = await readBetMix(i); if (!b) return;
+    return placeCrapsBet(i, sid, kind, b.bet, b.mix, b.test);
   }
   if (i.customId.startsWith('bac:amt:')) {
     const side = i.customId.split(':')[2] as BacSide;
-    const amt  = parseStrictInt(i.fields.getTextInputValue('amt'));
-    if (amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-    const b = resolveBet(i, amt);
-    return doBaccarat(i, side, b.bet, undefined, b.test);
+    const b = await readBetMix(i); if (!b) return;
+    return doBaccarat(i, side, b.bet, b.mix, b.test);
   }
   if (i.customId === 'vp:custombet') {
-    const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
-    if (amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-    const b = resolveBet(i, amt);
-    return startVpSession(i, b.bet, undefined, b.test);
+    const b = await readBetMix(i); if (!b) return;
+    return startVpSession(i, b.bet, b.mix, b.test);
   }
   if (i.customId === 'rou:num') {
     const num = parseStrictInt(i.fields.getTextInputValue('num'));
-    const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
-    if (num === null || amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-    const b = resolveBet(i, amt);
-    return doRouletteSpin(i, 'number', b.bet, num, undefined, b.test);
+    if (num === null) return i.reply({ content: '数字は 0〜36 の整数で入力してください', flags: MessageFlags.Ephemeral });
+    const b = await readBetMix(i); if (!b) return;
+    return doRouletteSpin(i, 'number', b.bet, num, b.mix, b.test);
   }
   if (i.customId.startsWith('rou:amt:')) {
     const kind = i.customId.split(':')[2] as RouKind;
-    const amt  = parseStrictInt(i.fields.getTextInputValue('amt'));
-    if (amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-    const b = resolveBet(i, amt);
-    return doRouletteSpin(i, kind, b.bet, undefined, undefined, b.test);
+    const b = await readBetMix(i); if (!b) return;
+    return doRouletteSpin(i, kind, b.bet, undefined, b.mix, b.test);
   }
   if (i.customId === 'slot:custombet') {
-    const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
-    if (amt === null) return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-    const b = resolveBet(i, amt);
-    return doSpin(i, b.bet, undefined, b.test);
+    const b = await readBetMix(i); if (!b) return;
+    return doSpin(i, b.bet, b.mix, b.test);
   }
   if (i.customId === 'dep:ltc') {
     assertNotBanned(i.user.id);

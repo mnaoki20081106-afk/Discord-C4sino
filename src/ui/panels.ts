@@ -3,6 +3,8 @@ import { L } from './leet.js';
 import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY } from '../payments/limits.js';
 import { renderBalance } from './render-balance.js';
 import { formatRemaining, elapsedRatio, EXTENSION_PERIOD_SEC, type MwsState } from '../mws/timer.js';
+import { cardButtonEmoji, cardText } from './format-games.js';
+import type { Card } from '../games/blackjack.js';
 
 export function blackjackPanel() {
   const embed = new EmbedBuilder()
@@ -134,13 +136,17 @@ export function videopokerPanel() {
   return { embeds: [embed], components: [row] };
 }
 
-export function vpHoldRow(held: boolean[]): ActionRowBuilder<ButtonBuilder>[] {
+export function vpHoldRow(held: boolean[], cards: Card[]): ActionRowBuilder<ButtonBuilder>[] {
   const row1 = new ActionRowBuilder<ButtonBuilder>();
   for (let i = 0; i < 5; i++) {
-    row1.addComponents(new ButtonBuilder()
+    const state = held[i] ? 'HELD' : 'HOLD';
+    const btn = new ButtonBuilder()
       .setCustomId(`vp:hold:${i}`)
-      .setLabel(`${i+1} ${held[i] ? 'HELD' : 'HOLD'}`)
-      .setStyle(held[i] ? ButtonStyle.Success : ButtonStyle.Secondary));
+      .setStyle(held[i] ? ButtonStyle.Success : ButtonStyle.Secondary);
+    const e = cards[i] ? cardButtonEmoji(cards[i]) : null;
+    if (e) btn.setEmoji(e).setLabel(state);
+    else btn.setLabel(cards[i] ? `${cardText(cards[i])} ${state}` : `${i+1} ${state}`);
+    row1.addComponents(btn);
   }
   const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId('vp:draw').setLabel('🎴 DRAW').setStyle(ButtonStyle.Primary),
@@ -371,10 +377,10 @@ export function crapsPlayPanel() {
     .setColor(0xb45309)
     .setDescription(
       '2 ダイスで Point / Come-out を解決。複数 BET をテーブルに置いて同時解決します。\n' +
-      '**mix BET が複雑なため、従来の `/setup game:craps` パネルから開始してください。**'
-    )
-    .setFooter({ text: 'Craps は近日 mix bet 対応予定' });
+      'BET ごとに PayPay 由来 / LTC 由来の金額を指定します。'
+    );
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('cr:start').setLabel('PLAY').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary),
   );
   return { embeds: [embed], components: [row] };

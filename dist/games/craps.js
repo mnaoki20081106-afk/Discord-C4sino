@@ -15,8 +15,8 @@ export const MULT = {
 export function newCraps() {
     return { phase: 'comeout', nextBetId: 1, bets: [], history: [], totalWagered: 0, totalReturned: 0 };
 }
-export function addBet(st, kind, amount) {
-    const b = { id: st.nextBetId++, kind, amount };
+export function addBet(st, kind, amount, mix) {
+    const b = { id: st.nextBetId++, kind, amount, mix };
     st.bets.push(b);
     st.totalWagered += amount;
     return b;
