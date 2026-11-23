@@ -12,7 +12,11 @@ const setup = new SlashCommandBuilder()
     .addStringOption(o => o.setName('game')
     .setDescription('どの種類を設置するか。all は type=overview の時のみ有効 (全ゲーム概要を1枚に)')
     .setRequired(true)
-    .addChoices({ name: 'All  (全ゲーム概要を 1 枚, overview 専用)', value: 'all' }, { name: 'Blackjack', value: 'blackjack' }, { name: 'Slots', value: 'slots' }, { name: 'Roulette', value: 'roulette' }, { name: 'Baccarat', value: 'baccarat' }, { name: 'Video Poker', value: 'videopoker' }, { name: 'Craps', value: 'craps' }, { name: 'Cashier (入金・出金)', value: 'cashier' }, { name: 'MWS Keep-Alive (7日延長タイマー・通知, panel 専用)', value: 'mws' }));
+    .addChoices({ name: 'All  (全ゲーム概要を 1 枚, overview 専用)', value: 'all' }, { name: 'Blackjack', value: 'blackjack' }, { name: 'Slots', value: 'slots' }, { name: 'Roulette', value: 'roulette' }, { name: 'Baccarat', value: 'baccarat' }, { name: 'Video Poker', value: 'videopoker' }, { name: 'Craps', value: 'craps' }, { name: 'Cashier (入金・出金)', value: 'cashier' }));
+const mwsCmd = new SlashCommandBuilder()
+    .setName('mws')
+    .setDescription('MWS の 7 日延長タイマーパネルをこのチャンネルに設置 (管理者)。残り 24h/6h/1h で通知')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels.toString());
 const balance = new SlashCommandBuilder()
     .setName('balance')
     .setDescription('自分のチップ残高を表示。PayPay由来/LTC由来の内訳ゲージも出る (ephemeral)');
@@ -176,7 +180,7 @@ const paypay = new SlashCommandBuilder()
     .addIntegerOption(o => o.setName('wallet').setDescription('送金元 wallet id (省略で残高多い方を自動選択)').setRequired(false))
     .addStringOption(o => o.setName('passcode').setDescription('リンクパスコード 4 桁数字 (強く推奨)').setRequired(false)));
 export const COMMAND_JSON = [
-    setup, balance, pay, withdraw, wallet, admin, bannedWords, paypay, leetCmd,
+    setup, balance, pay, withdraw, wallet, admin, bannedWords, paypay, leetCmd, mwsCmd,
     blackjackCmd, slotsCmd, rouletteCmd, baccaratCmd, videopokerCmd, crapsCmd,
 ].map(c => c.toJSON());
 /** 任意の token/clientId/guildId を使ってスラッシュコマンドを Discord に PUT する。

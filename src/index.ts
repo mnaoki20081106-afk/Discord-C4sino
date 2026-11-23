@@ -148,6 +148,7 @@ async function onCommand(i: ChatInputCommandInteraction) {
     case 'banned-words': return cmdBannedWords(i);
     case 'paypay':       return cmdPaypay(i);
     case 'leet':         return cmdLeet(i);
+    case 'mws':          return cmdMws(i);
     case 'blackjack':  return installPlayPanel(i, 'blackjack');
     case 'slots':      return installPlayPanel(i, 'slots');
     case 'roulette':   return installPlayPanel(i, 'roulette');
@@ -241,8 +242,6 @@ async function cmdSetup(i: ChatInputCommandInteraction) {
   if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
 
   if (type === 'overview') {
-    // ルール・配当表の説明パネル。mws には overview が無い。
-    if (game === 'mws') return i.reply({ content: 'MWS には overview が無い。type:panel で設置してね', flags: MessageFlags.Ephemeral });
     await i.channel.send({ embeds: [gameOverview(game as GameKey)] });
     return i.reply({ content: `✅ ${game} 概要パネルを設置`, flags: MessageFlags.Ephemeral });
   }
@@ -255,12 +254,21 @@ async function cmdSetup(i: ChatInputCommandInteraction) {
                : game === 'baccarat'    ? baccaratPanel()
                : game === 'videopoker'  ? videopokerPanel()
                : game === 'craps'       ? crapsPanel()
-               : game === 'mws'         ? mwsPanel(mws.getState())
                : depositPanel();
   const msg = await i.channel.send(payload);
   db.prepare('INSERT OR REPLACE INTO panels(guild_id,channel_id,message_id,game) VALUES (?,?,?,?)')
     .run(i.guildId!, i.channelId, msg.id, game);
   await i.reply({ content: `✅ ${game} パネルを設置`, flags: MessageFlags.Ephemeral });
+}
+
+async function cmdMws(i: ChatInputCommandInteraction) {
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageChannels))
+    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
+  if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
+  const msg = await i.channel.send(mwsPanel(mws.getState()));
+  db.prepare('INSERT OR REPLACE INTO panels(guild_id,channel_id,message_id,game) VALUES (?,?,?,?)')
+    .run(i.guildId!, i.channelId, msg.id, 'mws');
+  await i.reply({ content: '✅ MWS タイマーパネルを設置', flags: MessageFlags.Ephemeral });
 }
 
 async function cmdBalance(i: ChatInputCommandInteraction) {

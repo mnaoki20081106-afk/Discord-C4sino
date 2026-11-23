@@ -26,8 +26,12 @@ const setup = new SlashCommandBuilder()
       { name: 'Video Poker', value: 'videopoker' },
       { name: 'Craps',       value: 'craps' },
       { name: 'Cashier (入金・出金)', value: 'cashier' },
-      { name: 'MWS Keep-Alive (7日延長タイマー・通知, panel 専用)', value: 'mws' },
     ));
+
+const mwsCmd = new SlashCommandBuilder()
+  .setName('mws')
+  .setDescription('MWS の 7 日延長タイマーパネルをこのチャンネルに設置 (管理者)。残り 24h/6h/1h で通知')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels.toString());
 
 const balance = new SlashCommandBuilder()
   .setName('balance')
@@ -215,7 +219,7 @@ const paypay = new SlashCommandBuilder()
     .addStringOption(o => o.setName('passcode').setDescription('リンクパスコード 4 桁数字 (強く推奨)').setRequired(false)));
 
 export const COMMAND_JSON = [
-  setup, balance, pay, withdraw, wallet, admin, bannedWords, paypay, leetCmd,
+  setup, balance, pay, withdraw, wallet, admin, bannedWords, paypay, leetCmd, mwsCmd,
   blackjackCmd, slotsCmd, rouletteCmd, baccaratCmd, videopokerCmd, crapsCmd,
 ].map(c => c.toJSON());
 
