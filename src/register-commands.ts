@@ -17,6 +17,7 @@ const setup = new SlashCommandBuilder()
       { name: 'Video Poker', value: 'videopoker' },
       { name: 'Craps',       value: 'craps' },
       { name: 'Cashier (入金・出金)', value: 'cashier' },
+      { name: 'MWS Keep-Alive (7日延長タイマー・通知)', value: 'mws' },
     ));
 
 const balance = new SlashCommandBuilder()

@@ -7,7 +7,7 @@ const setup = new SlashCommandBuilder()
     .addStringOption(o => o.setName('game')
     .setDescription('設置するパネル種別。cashier は入出金パネル (ユーザーが入出金を開始する画面)')
     .setRequired(true)
-    .addChoices({ name: 'Blackjack', value: 'blackjack' }, { name: 'Slots', value: 'slots' }, { name: 'Roulette', value: 'roulette' }, { name: 'Baccarat', value: 'baccarat' }, { name: 'Video Poker', value: 'videopoker' }, { name: 'Craps', value: 'craps' }, { name: 'Cashier (入金・出金)', value: 'cashier' }));
+    .addChoices({ name: 'Blackjack', value: 'blackjack' }, { name: 'Slots', value: 'slots' }, { name: 'Roulette', value: 'roulette' }, { name: 'Baccarat', value: 'baccarat' }, { name: 'Video Poker', value: 'videopoker' }, { name: 'Craps', value: 'craps' }, { name: 'Cashier (入金・出金)', value: 'cashier' }, { name: 'MWS Keep-Alive (7日延長タイマー・通知)', value: 'mws' }));
 const balance = new SlashCommandBuilder()
     .setName('balance')
     .setDescription('自分のチップ残高を表示。PayPay由来/LTC由来の内訳ゲージも出る (ephemeral)');

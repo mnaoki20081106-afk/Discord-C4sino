@@ -2,6 +2,7 @@ import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedB
 import { L } from './leet.js';
 import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY } from '../payments/limits.js';
 import { renderBalance } from './render-balance.js';
+import { formatRemaining, elapsedRatio, EXTENSION_PERIOD_SEC, type MwsState } from '../mws/timer.js';
 
 export function blackjackPanel() {
   const embed = new EmbedBuilder()
@@ -454,3 +455,92 @@ export function bjActionsRow(actions: string[]): ActionRowBuilder<ButtonBuilder>
   }
   return row;
 }
+
+/* ────────────── MWS (cloud.m-ws.cc) 7 日延長タイマー ────────────── */
+
+const MWS_BAR_WIDTH = 24;
+
+function mwsBar(state: MwsState): string {
+  const r = elapsedRatio(state);
+  const filled = Math.round(MWS_BAR_WIDTH * r);
+  return '█'.repeat(filled) + '░'.repeat(MWS_BAR_WIDTH - filled);
+}
+
+function mwsStatusColor(remainingSec: number): number {
+  if (remainingSec <= 0)          return 0x991b1b; // 期限切れ: 暗赤
+  if (remainingSec <= 3600)       return 0xdc2626; // 残り 1h 以下: 赤
+  if (remainingSec <= 6 * 3600)   return 0xf59e0b; // 残り 6h 以下: 橙
+  if (remainingSec <= 24 * 3600)  return 0xeab308; // 残り 24h 以下: 黄
+  return 0x10b981;                                 // 余裕: 緑
+}
+
+/**
+ * MWS 7 日タイマーパネル。
+ * 現在の残り時間・最終延長時刻・通知設定を表示し、
+ * - 延長完了ボタン (タイマーリセット、管理者のみ)
+ * - 通知設定ボタン (このチャンネル・ロール指定、管理者のみ)
+ * - 更新ボタン (誰でも)
+ * を配置する。
+ */
+export function mwsPanel(state: MwsState) {
+  const bar = mwsBar(state);
+  const extendedAt = `<t:${state.lastExtendedAt}:f>`;
+  const expiresAt  = `<t:${state.expiresAt}:f> (<t:${state.expiresAt}:R>)`;
+  const remaining  = formatRemaining(state.remainingSec);
+  const notify = state.notifyChannelId
+    ? `<#${state.notifyChannelId}>` + (state.notifyRoleId ? ` (<@&${state.notifyRoleId}> を mention)` : '')
+    : '_未設定_';
+
+  const embed = new EmbedBuilder()
+    .setTitle('MWS Keep-Alive  —  cloud.m-ws.cc')
+    .setDescription(
+      [
+        '```',
+        `[${bar}]`,
+        '```',
+        remaining,
+        '',
+        '**使い方**',
+        '1. MWS ダッシュボードで「延長」ボタンを押す',
+        '2. このパネルの **延長完了** ボタンを押してタイマーをリセット',
+        '3. 残り **24h / 6h / 1h** になったら通知チャンネルに警告が飛ぶ',
+        '',
+        '_自動延長は MWS 利用規約違反のため、Bot 側では残時間通知のみを行います。_',
+      ].join('\n')
+    )
+    .addFields(
+      { name: '最終延長',       value: extendedAt,                             inline: true },
+      { name: '次回期限',       value: expiresAt,                              inline: true },
+      { name: '通知先',         value: notify,                                 inline: false },
+    )
+    .setColor(mwsStatusColor(state.remainingSec))
+    .setFooter({ text: `MWS keep-alive · 7日 ごとに手動延長が必要` });
+
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('mws:extended').setLabel('延長完了 (タイマーリセット)').setStyle(ButtonStyle.Success).setEmoji('🔁'),
+    new ButtonBuilder().setCustomId('mws:notify_here').setLabel('通知先をこのチャンネルに').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('mws:notify_clear').setLabel('通知先を解除').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId('mws:refresh').setLabel('更新').setStyle(ButtonStyle.Secondary),
+  );
+
+  return { embeds: [embed], components: [row] };
+}
+
+/**
+ * 通知チャンネルに流す警告メッセージ (24h / 6h / 1h / expired)。
+ */
+export function mwsWarningText(bucket: 24 | 6 | 1 | 'expired', state: MwsState, roleMention: string | null): string {
+  const prefix = roleMention ? `${roleMention} ` : '';
+  if (bucket === 'expired') {
+    return `${prefix}:red_circle:  **MWS Bot の稼働が停止しました。**\ncloud.m-ws.cc ダッシュボードで直ちに「延長」ボタンを押し、起動後にパネルの **延長完了** を押してください。`;
+  }
+  const emoji = bucket === 24 ? ':yellow_circle:' : bucket === 6 ? ':orange_circle:' : ':red_circle:';
+  const label = bucket === 24 ? '残り 24 時間' : bucket === 6 ? '残り 6 時間' : '残り 1 時間';
+  return [
+    `${prefix}${emoji}  **MWS keep-alive: ${label}**`,
+    `次回期限: <t:${state.expiresAt}:f> (<t:${state.expiresAt}:R>)`,
+    '',
+    'cloud.m-ws.cc のダッシュボードで「延長」ボタンを押し、その後パネルの **延長完了** を押してください。',
+  ].join('\n');
+}
+

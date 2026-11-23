@@ -150,6 +150,17 @@ CREATE TABLE IF NOT EXISTS achievements (
   created_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
 );
 CREATE INDEX IF NOT EXISTS idx_ach_guild ON achievements(guild_id);
+
+-- MWS (cloud.m-ws.cc) の 7 日自動延長タイマー状態 (シングルトン行)
+-- user がダッシュボードで延長ボタンを押したら /mws 延長完了 コマンドでタイマーをリセット。
+-- 残り 24h / 6h / 1h の閾値を跨いだ時に通知チャンネルに警告を投げる。
+CREATE TABLE IF NOT EXISTS mws_extension (
+  id                INTEGER PRIMARY KEY CHECK(id = 1),
+  last_extended_at  INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+  notify_channel_id TEXT,
+  notify_role_id    TEXT,
+  last_warn_bucket  INTEGER NOT NULL DEFAULT 0  -- 発火済みの最小バケット: 0=未送 / 24 / 6 / 1 / -1=期限切れ通知済
+);
 `);
 
 // Migration: 旧 withdrawals.status CHECK に broadcasting / broadcast_failed を追加

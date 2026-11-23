@@ -9,7 +9,8 @@ import { dealBaccaratWithCap, payoutMult as bacPayout } from './games/baccarat.j
 import { startVP, drawVPWithCap, payoutFor } from './games/videopoker.js';
 import { newCraps, addBet, roll as crapsRoll, openExposure } from './games/craps.js';
 import { formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker } from './ui/format-games.js';
-import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel } from './ui/panels.js';
+import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel, mwsPanel, mwsWarningText } from './ui/panels.js';
+import * as mws from './mws/timer.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
 import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
@@ -84,7 +85,31 @@ client.once(Events.ClientReady, async (c) => {
     catch (e) {
         console.error('[automod] cleanup failed:', e.message);
     }
+    // MWS 延長タイマーの定期監視: 10 分間隔で残り時間を確認し、24h/6h/1h 閾値を跨いだら通知
+    startMwsTicker();
 });
+/** MWS 延長タイマーの定期 tick (10 分間隔)。startup / クラッシュ復旧時に呼ぶ。 */
+function startMwsTicker() {
+    const run = async () => {
+        try {
+            const result = mws.evaluateTick();
+            if (!result || !result.state.notifyChannelId)
+                return;
+            const ch = await client.channels.fetch(result.state.notifyChannelId).catch(() => null);
+            if (!ch || !('send' in ch))
+                return;
+            const roleMention = result.state.notifyRoleId ? `<@&${result.state.notifyRoleId}>` : null;
+            const text = mwsWarningText(result.bucket, result.state, roleMention);
+            await ch.send({ content: text, allowedMentions: { roles: result.state.notifyRoleId ? [result.state.notifyRoleId] : [] } }).catch(() => { });
+        }
+        catch (e) {
+            console.error('[mws] tick failed:', e.message);
+        }
+    };
+    // 起動直後に 1 回、その後 10 分おき
+    run();
+    setInterval(run, 10 * 60 * 1000);
+}
 client.on(Events.GuildCreate, async (g) => {
     // 旧ルールが入っていたら削除
     try {
@@ -226,7 +251,8 @@ async function cmdSetup(i) {
                 : game === 'baccarat' ? baccaratPanel()
                     : game === 'videopoker' ? videopokerPanel()
                         : game === 'craps' ? crapsPanel()
-                            : depositPanel();
+                            : game === 'mws' ? mwsPanel(mws.getState())
+                                : depositPanel();
     if (!i.channel || !('send' in i.channel))
         return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
     const msg = await i.channel.send(payload);
@@ -875,10 +901,42 @@ async function onButton(i) {
         return onAdminButton(i, kind);
     if (ns === 'wd' && (kind === 'approve' || kind === 'reject'))
         return onWithdrawAdmin(i, kind, arg);
+    if (ns === 'mws')
+        return onMwsButton(i, kind);
     if (ns === 'bal') {
         const r = getReserves(i.user.id);
         const payload = await balanceReply(r.pp, r.ltc);
         return i.reply({ ...payload, flags: MessageFlags.Ephemeral });
+    }
+}
+/**
+ * MWS keep-alive panel buttons:
+ *   mws:extended      — 延長完了 (タイマーリセット、管理者のみ)
+ *   mws:notify_here   — 通知先をこのチャンネルに設定 (管理者のみ)
+ *   mws:notify_clear  — 通知先を解除 (管理者のみ)
+ *   mws:refresh       — パネル表示を更新 (誰でも)
+ */
+async function onMwsButton(i, kind) {
+    const isAdmin = i.memberPermissions?.has(PermissionFlagsBits.ManageChannels) ?? false;
+    if (kind === 'refresh') {
+        const state = mws.getState();
+        return i.update(mwsPanel(state));
+    }
+    if (!isAdmin) {
+        return i.reply({ content: '管理者のみが操作できます (ManageChannels 権限)', flags: MessageFlags.Ephemeral });
+    }
+    if (kind === 'extended') {
+        const state = mws.markExtended();
+        await i.update(mwsPanel(state));
+        return i.followUp({ content: `✅ タイマーをリセットしました。次回期限: <t:${state.expiresAt}:f>`, flags: MessageFlags.Ephemeral });
+    }
+    if (kind === 'notify_here') {
+        const state = mws.setNotifyTarget(i.channelId);
+        return i.update(mwsPanel(state));
+    }
+    if (kind === 'notify_clear') {
+        const state = mws.clearNotifyTarget();
+        return i.update(mwsPanel(state));
     }
 }
 async function onWithdrawAdmin(i, kind, arg) {
