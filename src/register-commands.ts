@@ -181,9 +181,9 @@ const bannedWords = new SlashCommandBuilder()
     .setDescription('NG ワードを追加。該当投稿は即削除+伏字化で webhook 再投稿される')
     .addStringOption(o => o.setName('word').setDescription('追加するワード (60文字以下、ASCII+日本語可)').setRequired(true)))
   .addSubcommand(s => s.setName('list')
-    .setDescription('登録済 NG ワード一覧 (内蔵語 + ギルド独自追加語)'))
+    .setDescription('登録済 NG ワード一覧 (初期登録の語も含めて全部)'))
   .addSubcommand(s => s.setName('remove')
-    .setDescription('登録済 NG ワードを削除 (内蔵語は削除不可)')
+    .setDescription('登録済 NG ワードを削除 (初期登録の語も削除できる)')
     .addStringOption(o => o.setName('word').setDescription('削除するワード').setRequired(true)));
 
 const gamePanel = (name: string, title: string, rules: string) => new SlashCommandBuilder()

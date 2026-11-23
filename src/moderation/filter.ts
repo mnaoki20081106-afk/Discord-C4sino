@@ -3,7 +3,7 @@ import {
   Webhook, PermissionFlagsBits, ChannelType,
 } from 'discord.js';
 import { L } from '../ui/leet.js';
-import { BUILTIN_KEYWORDS, getExtraKeywords } from './automod.js';
+import { getBannedKeywords } from './automod.js';
 
 const WEBHOOK_NAME = 'c4sino-filter';
 const JA_MASK = '◯';
@@ -125,7 +125,7 @@ export function installFilter(client: Client) {
       if (msg.system) return;
       if (!msg.content) return;                   // 添付のみ投稿は対象外
 
-      const words = [...BUILTIN_KEYWORDS, ...getExtraKeywords(msg.guild.id)];
+      const words = getBannedKeywords(msg.guild.id);
       const { changed, content } = rewriteContent(msg.content, words);
       if (!changed) return;
 

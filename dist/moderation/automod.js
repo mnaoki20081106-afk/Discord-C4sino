@@ -7,8 +7,25 @@ db.exec(`CREATE TABLE IF NOT EXISTS automod_banned_words (
   created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
   PRIMARY KEY (guild_id, word)
 );`);
+// 初期 NG ワードを登録済みのサーバー。一度登録したら再登録しないので、削除した語は戻らない。
+db.exec(`CREATE TABLE IF NOT EXISTS automod_seeded (
+  guild_id  TEXT PRIMARY KEY,
+  seeded_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);`);
+/** 初期 NG ワード (DEFAULT_KEYWORDS) をそのサーバーの NG ワードとして一度だけ登録する。 */
+function ensureSeeded(guildId) {
+    if (db.prepare('SELECT 1 FROM automod_seeded WHERE guild_id=?').get(guildId))
+        return;
+    const ins = db.prepare('INSERT OR IGNORE INTO automod_banned_words(guild_id, word, added_by) VALUES (?,?,?)');
+    db.transaction(() => {
+        for (const w of DEFAULT_KEYWORDS)
+            ins.run(guildId, w, 'system');
+        db.prepare('INSERT INTO automod_seeded(guild_id) VALUES (?)').run(guildId);
+    })();
+}
 export function listBannedWords(guildId) {
-    return db.prepare('SELECT word, added_by, created_at FROM automod_banned_words WHERE guild_id=? ORDER BY created_at DESC')
+    ensureSeeded(guildId);
+    return db.prepare('SELECT word, added_by, created_at FROM automod_banned_words WHERE guild_id=? ORDER BY created_at DESC, word')
         .all(guildId);
 }
 export function addBannedWord(guildId, word, addedBy) {
@@ -17,22 +34,26 @@ export function addBannedWord(guildId, word, addedBy) {
         return { added: false, reason: '空の語は追加できません' };
     if (w.length > 60)
         return { added: false, reason: '60文字以下にしてください (Discord AutoMod 制約)' };
+    ensureSeeded(guildId);
     const info = db.prepare('INSERT OR IGNORE INTO automod_banned_words(guild_id, word, added_by) VALUES (?,?,?)').run(guildId, w, addedBy);
     if (info.changes === 0)
         return { added: false, reason: '既に登録済みです' };
     return { added: true };
 }
 export function removeBannedWord(guildId, word) {
+    ensureSeeded(guildId);
     const info = db.prepare('DELETE FROM automod_banned_words WHERE guild_id=? AND word=?').run(guildId, word.trim());
     return info.changes > 0;
 }
-export function getExtraKeywords(guildId) {
+/** そのサーバーの NG ワード全件 (初期登録分を含む)。 */
+export function getBannedKeywords(guildId) {
+    ensureSeeded(guildId);
     return db.prepare('SELECT word FROM automod_banned_words WHERE guild_id=?').all(guildId).map(r => r.word);
 }
 export const AUTOMOD_RULE_NAME = 'c4sino-ward';
-// 直接語 (word-boundary 一致)。60文字以下 / 最大1000個。
+// 各サーバーに最初に一度だけ登録する NG ワード。登録後はほかの語と同じく追加・削除できる。
 // 頻出誤爆語 (例: "bet" が "better/between" に当たる) は keyword ではなく regex 側で境界付き制御する。
-const KEYWORDS = [
+const DEFAULT_KEYWORDS = [
     // 代表語
     'カジノ', 'casino',
     'ギャンブル', 'gamble', 'gambling',
@@ -99,7 +120,6 @@ const ACTIONS = [
  * - Bot の権限 (ManageGuild) が無ければ skipped を返す
  * - 例外は呼び出し元で扱えるよう re-throw する (sync コマンドでユーザーに見せる)
  */
-export const BUILTIN_KEYWORDS = KEYWORDS;
 export async function syncGuildAutoMod(guild, opts) {
     const me = guild.members.me ?? (await guild.members.fetchMe().catch(() => null));
     if (!me)
@@ -116,7 +136,7 @@ export async function syncGuildAutoMod(guild, opts) {
         eventType: AutoModerationRuleEventType.MessageSend,
         triggerType: AutoModerationRuleTriggerType.Keyword,
         triggerMetadata: {
-            keywordFilter: mergeKeywords(KEYWORDS, opts?.extraKeywords ?? []),
+            keywordFilter: mergeKeywords(opts?.extraKeywords ?? []),
             regexPatterns: REGEXES,
             allowList: ALLOW_LIST,
             presets: [],
@@ -175,11 +195,11 @@ export async function removeAutoModInAllGuilds(client) {
         }
     }
 }
-// 内蔵 + ギルド独自の語をマージ。lowercase 比較で重複排除し、1000個・60字制限に収める。
-function mergeKeywords(builtin, extra) {
+// lowercase 比較で重複排除し、1000個・60字制限に収める。
+function mergeKeywords(words) {
     const seen = new Set();
     const out = [];
-    for (const w of [...builtin, ...extra]) {
+    for (const w of words) {
         const t = w.trim();
         if (!t || t.length > 60)
             continue;

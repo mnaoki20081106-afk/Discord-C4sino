@@ -20,7 +20,7 @@ import * as withdraw from './payments/withdraw.js';
 import { L } from './ui/leet.js';
 import { gameOverview } from './ui/overview.js';
 import * as ach from './achievements.js';
-import { removeGuildAutoMod, removeAutoModInAllGuilds, AUTOMOD_RULE_NAME, listBannedWords, addBannedWord, removeBannedWord, BUILTIN_KEYWORDS, } from './moderation/automod.js';
+import { removeGuildAutoMod, removeAutoModInAllGuilds, AUTOMOD_RULE_NAME, listBannedWords, addBannedWord, removeBannedWord, } from './moderation/automod.js';
 import { installFilter } from './moderation/filter.js';
 const client = new Client({
     intents: [
@@ -198,17 +198,24 @@ async function cmdBannedWords(i) {
         return i.reply({ content: `🗑️ \`${word}\` を NG ワードから削除しました`, flags: MessageFlags.Ephemeral });
     }
     if (sub === 'list') {
-        const custom = listBannedWords(i.guild.id);
-        const customLines = custom.length
-            ? custom.map(r => `\`${r.word}\`  — <@${r.added_by}>  <t:${r.created_at}:R>`).join('\n')
-            : '_(なし)_';
-        const builtinPreview = BUILTIN_KEYWORDS.slice(0, 30).map(w => `\`${w}\``).join(', ')
-            + (BUILTIN_KEYWORDS.length > 30 ? ` … (計 ${BUILTIN_KEYWORDS.length} 語)` : '');
+        const words = listBannedWords(i.guild.id);
+        // 説明欄の上限 4096 文字に収まる所まで並べ、残りは件数だけ出す
+        let body = '';
+        let shown = 0;
+        for (const r of words) {
+            const piece = `${shown ? ', ' : ''}\`${r.word}\``;
+            if (body.length + piece.length > 3900)
+                break;
+            body += piece;
+            shown++;
+        }
+        if (shown < words.length)
+            body += ` … ほか ${words.length - shown} 語`;
         const embed = new EmbedBuilder()
-            .setTitle('🚫 NG ワード一覧')
+            .setTitle(`🚫 NG ワード一覧 (${words.length})`)
             .setColor(0xd4af37)
-            .addFields({ name: `📝 カスタム (${custom.length})`, value: customLines.slice(0, 1024), inline: false }, { name: `🔒 内蔵 (${BUILTIN_KEYWORDS.length})`, value: builtinPreview.slice(0, 1024), inline: false })
-            .setFooter({ text: '内蔵語は編集不可 / 変種は regex で別途カバー' });
+            .setDescription(body || '_(なし)_')
+            .setFooter({ text: 'どの語も /banned-words remove で削除できます' });
         return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
     }
 }
