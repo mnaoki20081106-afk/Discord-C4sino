@@ -955,6 +955,7 @@ async function onButton(i: ButtonInteraction) {
   if (ns === 'dep') return onDepositButton(i, kind, arg);
   if (ns === 'adm') return onAdminButton(i, kind);
   if (ns === 'wd' && (kind === 'approve' || kind === 'reject')) return onWithdrawAdmin(i, kind, arg);
+  if (ns === 'wd' && (kind === 'paypay' || kind === 'ltc')) return onWithdrawUserButton(i, kind);
   if (ns === 'mws') return onMwsButton(i, kind);
   if (ns === 'bal') {
     const r = getReserves(i.user.id);
@@ -1800,19 +1801,15 @@ async function onDepositButton(i: ButtonInteraction, kind: string, _arg: string)
   if (kind === 'ltc')    return showLtcAddress(i);
 }
 
+async function onWithdrawUserButton(i: ButtonInteraction, kind: string) {
+  assertNotBanned(i.user.id);
+  if (kind === 'paypay') return openPaypayWithdrawModal(i);
+  if (kind === 'ltc')    return openLtcWithdrawModal(i);
+}
+
 async function onSelect(i: StringSelectMenuInteraction) {
-  if (i.customId === 'dep:method') {
-    assertNotBanned(i.user.id);
-    const choice = i.values[0];
-    if (choice === 'paypay') return openPaypayDepositModal(i);
-    if (choice === 'ltc')    return showLtcAddress(i);
-  }
-  if (i.customId === 'wd:method') {
-    assertNotBanned(i.user.id);
-    const choice = i.values[0];
-    if (choice === 'paypay') return openPaypayWithdrawModal(i);
-    if (choice === 'ltc')    return openLtcWithdrawModal(i);
-  }
+  // Cashier の入金/出金は SelectMenu の「選択済み」状態が残る問題があったため
+  // Button (dep:paypay/dep:ltc/wd:paypay/wd:ltc) に移行済み。ここでは扱わない。
   if (i.customId === 'rou:select') {
     assertNotBanned(i.user.id);
     const kind = i.values[0];

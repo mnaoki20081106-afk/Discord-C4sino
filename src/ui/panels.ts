@@ -417,28 +417,20 @@ export function depositPanel() {
     )
     .setFooter({ text: 'Discord C4sino · Cashier' });
 
-  const depSelect = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId('dep:method')
-      .setPlaceholder('入金方法を選択…')
-      .addOptions(
-        { label: 'PayPay 送金リンクで入金', value: 'paypay', description: '送金リンク URL / ID を貼り付け' },
-        { label: 'LTC で入金',               value: 'ltc',    description: '専用アドレスを発行、送金後に自動チャージ' },
-      )
+  // SelectMenu は「最後に選ばれた値」が全員に残り続ける仕様があるため、
+  // 永続パネルでは Button を使う。
+  const depRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('dep:paypay').setLabel('入金: PayPay').setStyle(ButtonStyle.Success).setEmoji('🅿️'),
+    new ButtonBuilder().setCustomId('dep:ltc').setLabel('入金: LTC').setStyle(ButtonStyle.Success).setEmoji('🪙'),
   );
-  const wdSelect = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId('wd:method')
-      .setPlaceholder('出金方法を選択…')
-      .addOptions(
-        { label: 'PayPay で出金', value: 'paypay', description: '送金リンクを DM で受取 (手数料無料)' },
-        { label: 'LTC で出金',    value: 'ltc',    description: '任意の LTC アドレスへ送金 (手数料あり)' },
-      )
+  const wdRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('wd:paypay').setLabel('出金: PayPay').setStyle(ButtonStyle.Primary).setEmoji('🅿️'),
+    new ButtonBuilder().setCustomId('wd:ltc').setLabel('出金: LTC').setStyle(ButtonStyle.Primary).setEmoji('🪙'),
   );
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary),
   );
-  return { embeds: [embed], components: [depSelect, wdSelect, row] };
+  return { embeds: [embed], components: [depRow, wdRow, row] };
 }
 
 export function bjActionsRow(actions: string[]): ActionRowBuilder<ButtonBuilder> {

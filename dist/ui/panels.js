@@ -248,16 +248,12 @@ export function depositPanel() {
             `**LTC**    任意アドレス指定・ネットワーク手数料あり (¥${MIN_WITHDRAW_JPY.ltc}〜 / LTC 由来の範囲)`,
         inline: false }, { name: L('Rate'), value: `LTC は CoinGecko の現在レートで JPY 換算`, inline: false })
         .setFooter({ text: 'Discord C4sino · Cashier' });
-    const depSelect = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
-        .setCustomId('dep:method')
-        .setPlaceholder('入金方法を選択…')
-        .addOptions({ label: 'PayPay 送金リンクで入金', value: 'paypay', description: '送金リンク URL / ID を貼り付け' }, { label: 'LTC で入金', value: 'ltc', description: '専用アドレスを発行、送金後に自動チャージ' }));
-    const wdSelect = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder()
-        .setCustomId('wd:method')
-        .setPlaceholder('出金方法を選択…')
-        .addOptions({ label: 'PayPay で出金', value: 'paypay', description: '送金リンクを DM で受取 (手数料無料)' }, { label: 'LTC で出金', value: 'ltc', description: '任意の LTC アドレスへ送金 (手数料あり)' }));
-    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Success));
-    return { embeds: [embed], components: [depSelect, wdSelect, row] };
+    // SelectMenu は「最後に選ばれた値」が全員に残り続ける仕様があるため、
+    // 永続パネルでは Button を使う。
+    const depRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('dep:paypay').setLabel('入金: PayPay').setStyle(ButtonStyle.Success).setEmoji('🅿️'), new ButtonBuilder().setCustomId('dep:ltc').setLabel('入金: LTC').setStyle(ButtonStyle.Success).setEmoji('🪙'));
+    const wdRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('wd:paypay').setLabel('出金: PayPay').setStyle(ButtonStyle.Primary).setEmoji('🅿️'), new ButtonBuilder().setCustomId('wd:ltc').setLabel('出金: LTC').setStyle(ButtonStyle.Primary).setEmoji('🪙'));
+    const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary));
+    return { embeds: [embed], components: [depRow, wdRow, row] };
 }
 export function bjActionsRow(actions) {
     const map = {
