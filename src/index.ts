@@ -1060,6 +1060,32 @@ async function onAdminButton(i: ButtonInteraction, kind: string) {
 
 /* ────────────── BLACKJACK ────────────── */
 
+/* ────────────── TEST PLAY (管理者のみ、chip を動かさない) ────────────── */
+
+/** テストプレイで払戻しを計算するための仮 BET。残高からは引かれない。 */
+const TEST_BET = 100;
+
+function canTestPlay(i: { memberPermissions: Readonly<{ has(p: bigint): boolean }> | null }): boolean {
+  return i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false;
+}
+
+/** テストプレイでは運営残高による払戻し上限をかけない。 */
+async function capFor(test: boolean): Promise<number> {
+  return test ? Number.MAX_SAFE_INTEGER : housePayoutCap();
+}
+async function clampFor(amount: number, test: boolean): Promise<number> {
+  return test ? amount : clampPayout(amount);
+}
+
+/** 説明文を設定し終えた embed に呼ぶ。 */
+function markTest(embed: EmbedBuilder): EmbedBuilder {
+  embed.setTitle(`[TEST] ${embed.data.title ?? ''}`);
+  embed.setDescription(
+    `**テストプレイ** — 仮の BET ${TEST_BET} で計算。残高・履歴・実績には反映されません\n\n${embed.data.description ?? ''}`,
+  );
+  return embed;
+}
+
 async function onBJButton(i: ButtonInteraction, kind: string, arg: string) {
   if (kind === 'bet') {
     assertNotBanned(i.user.id);
@@ -1081,7 +1107,7 @@ async function onBJButton(i: ButtonInteraction, kind: string, arg: string) {
     const action = arg as 'hit'|'stand'|'double'|'split';
 
     // double / split は 追加 BET が発生するので chip を実際に debit する
-    if (action === 'double' || action === 'split') {
+    if (!entry.test && (action === 'double' || action === 'split')) {
       const addlBet = st.bets[st.active];  // 現在ハンドの BET 分を追加
       if (getBalance(i.user.id) < addlBet) {
         return i.reply({ content: `残高不足 (必要: ¥${addlBet.toLocaleString()})`, flags: MessageFlags.Ephemeral });
@@ -1102,7 +1128,7 @@ async function onBJButton(i: ButtonInteraction, kind: string, arg: string) {
       }
     }
 
-    const cap = await housePayoutCap();
+    const cap = await capFor(!!entry.test);
     apply(st, action, cap);
     await updateBJMessage(i, entry.id, st);
   }
@@ -1114,15 +1140,17 @@ function extractSid(footer?: string | null): string | null {
   return m?.[1] ?? null;
 }
 
-async function startBJ(i: ButtonInteraction | ModalSubmitInteraction, bet: number, mix?: BetMix) {
+async function startBJ(i: ButtonInteraction | ModalSubmitInteraction, bet: number, mix?: BetMix, test = false) {
   assertNotBanned(i.user.id);
   ensureUser(i.user.id);
   if (bet < 10 || bet > 50000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
-  if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
-  if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:blackjack');
-  else txCredit(i.user.id, -bet, 'bet:blackjack');
+  if (!test) {
+    if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
+    if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:blackjack');
+    else txCredit(i.user.id, -bet, 'bet:blackjack');
+  }
   const st = startHand(bet, newShoe());
-  const entry = sessions.create(i.user.id, 'blackjack', st, bet, mix);
+  const entry = sessions.create(i.user.id, 'blackjack', st, bet, mix, test);
 
   if (isBlackjack(st.player[0]) || isBlackjack(st.dealer)) {
     const dealerBJ = isBlackjack(st.dealer);
@@ -1138,7 +1166,8 @@ async function startBJ(i: ButtonInteraction | ModalSubmitInteraction, bet: numbe
 
 async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
   sessions.save(sid);
-  if (st.phase === 'done') await applyBJClamp(st);
+  const test = !!sessions.get(sid)?.test;
+  if (st.phase === 'done' && !test) await applyBJClamp(st);
   const boardText = formatBlackjack({
     player: st.player, active: st.active, dealer: st.dealer,
     hideHole: st.phase === 'player',
@@ -1147,12 +1176,14 @@ async function sendBJEphemeral(i: ButtonInteraction, sid: string, st: BJState) {
   });
   const embed = buildBJEmbed(st, getBalance(i.user.id), sid);
   embed.setDescription(`${embed.data.description ?? ''}\n\n${boardText}`);
+  if (test) markTest(embed);
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   if (st.phase === 'player') rows.push(bjActionsRow(availableActions(st)));
 
   await (i as any).reply({ embeds: [embed], components: rows, flags: MessageFlags.Ephemeral });
 
   if (st.phase === 'done') {
+    if (test) { sessions.drop(sid); return; }
     if (st.payout && st.payout > 0) {
       const mix = sessions.get(sid)?.mix;
       if (mix) payoutByMix(i.user.id, st.payout, mix, 'win:blackjack', sid);
@@ -1256,7 +1287,8 @@ async function onGameSettled(i: ButtonInteraction | ModalSubmitInteraction, game
 
 async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState) {
   sessions.save(sid);
-  if (st.phase === 'done') await applyBJClamp(st);
+  const test = !!sessions.get(sid)?.test;
+  if (st.phase === 'done' && !test) await applyBJClamp(st);
   const boardText = formatBlackjack({
     player: st.player, active: st.active, dealer: st.dealer,
     hideHole: st.phase === 'player',
@@ -1265,10 +1297,12 @@ async function updateBJMessage(i: ButtonInteraction, sid: string, st: BJState) {
   });
   const embed = buildBJEmbed(st, getBalance(i.user.id), sid);
   embed.setDescription(`${embed.data.description ?? ''}\n\n${boardText}`);
+  if (test) markTest(embed);
   const rows: ActionRowBuilder<ButtonBuilder>[] = [];
   if (st.phase === 'player') rows.push(bjActionsRow(availableActions(st)));
   await i.update({ embeds: [embed], files: [], components: rows, attachments: [] });
   if (st.phase === 'done') {
+    if (test) { sessions.drop(sid); return; }
     if (st.payout && st.payout > 0) {
       const mix = sessions.get(sid)?.mix;
       if (mix) payoutByMix(i.user.id, st.payout, mix, 'win:blackjack', sid);
@@ -1294,24 +1328,26 @@ async function onSlotButton(i: ButtonInteraction, kind: string, arg: string) {
   await doSpin(i, parseInt(arg, 10));
 }
 
-async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number, mix?: BetMix) {
+async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number, mix?: BetMix, test = false) {
   assertNotBanned(i.user.id);
   ensureUser(i.user.id);
   if (bet < 10 || bet > 10000) return i.reply({ content: `${L('BET')} は 10 〜 10,000`, flags: MessageFlags.Ephemeral });
-  if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
+  if (!test && getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
   // 3秒 ACK 期限対策: 外部 API 呼び出し前に defer しておく
   if (!i.deferred && !i.replied) await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
-  if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:slots');
-  else txCredit(i.user.id, -bet, 'bet:slots');
+  if (!test) {
+    if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:slots');
+    else txCredit(i.user.id, -bet, 'bet:slots');
+  }
 
-  const result = spinWithCap(bet, await housePayoutCap());
+  const result = spinWithCap(bet, await capFor(test));
   const stripA = reelStrip(result.reels[0], 8);
   const stripB = reelStrip(result.reels[1], 10);
   const stripC = reelStrip(result.reels[2], 12);
 
   const mkEmbed = (reels: typeof result.reels, spinning: boolean, mult: number, label?: string) => {
     const text = formatSlots({ reels, bet, payoutMult: mult, spinning, label });
-    return new EmbedBuilder()
+    const embed = new EmbedBuilder()
       .setTitle(`🎰 ${L('SLOTS')}`)
       .setColor(spinning ? 0x3b82f6 : (mult > 0 ? 0x22c55e : 0xef4444))
       .setDescription(text)
@@ -1319,6 +1355,7 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
         { name: L('Bet'), value: `${bet.toLocaleString()}`, inline: true },
         { name: L('Balance'), value: `${getBalance(i.user.id).toLocaleString()}`, inline: true },
       );
+    return test ? markTest(embed) : embed;
   };
 
   await i.editReply({ embeds: [mkEmbed([stripA[0], stripB[0], stripC[0]], true, 0)], files: [] });
@@ -1341,7 +1378,7 @@ async function doSpin(i: ButtonInteraction | ModalSubmitInteraction, bet: number
     });
   }
 
-  if (result.payoutMult > 0) {
+  if (result.payoutMult > 0 && !test) {
     const win = await clampPayout(bet * result.payoutMult);
     if (win > 0) {
       if (mix) payoutByMix(i.user.id, win, mix, 'win:slots');
@@ -1396,19 +1433,21 @@ async function openRouletteAmountModal(i: ButtonInteraction | StringSelectMenuIn
 
 async function doRouletteSpin(
   i: ModalSubmitInteraction,
-  kind: RouKind, bet: number, number?: number, mix?: BetMix
+  kind: RouKind, bet: number, number?: number, mix?: BetMix, test = false
 ) {
   assertNotBanned(i.user.id);
   ensureUser(i.user.id);
   if (bet < 10 || bet > 50_000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
-  if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
+  if (!test && getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
   if (kind === 'number' && (number === undefined || number < 0 || number > 36))
     return i.reply({ content: '数字は 0 〜 36 です', flags: MessageFlags.Ephemeral });
   if (!i.deferred && !i.replied) await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
-  if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:roulette');
-  else txCredit(i.user.id, -bet, 'bet:roulette');
+  if (!test) {
+    if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:roulette');
+    else txCredit(i.user.id, -bet, 'bet:roulette');
+  }
 
-  const result = spinRouletteWithCap({ kind, amount: bet, number }, await housePayoutCap());
+  const result = spinRouletteWithCap({ kind, amount: bet, number }, await capFor(test));
   const mult   = rouPayout({ kind, amount: bet, number }, result);
   const label  = kind === 'number' ? `${ROU_LABEL.number} ${number}` : (ROU_LABEL[kind] ?? kind);
 
@@ -1418,13 +1457,14 @@ async function doRouletteSpin(
       resultNumber: result, spinning,
       betLabel: label, betAmount: bet, payoutMult: finalMult,
     });
-    return new EmbedBuilder()
+    const embed = new EmbedBuilder()
       .setTitle(`🎡 ${L('ROULETTE')}`)
       .setColor(color)
       .setDescription(text)
       .addFields(
         { name: L('Balance'), value: `${getBalance(i.user.id).toLocaleString()}`, inline: true },
       );
+    return test ? markTest(embed) : embed;
   };
 
   // 回転演出なし (絵文字表示なので 2 フレームだけ: spinning → result)
@@ -1432,7 +1472,7 @@ async function doRouletteSpin(
   await new Promise(r => setTimeout(r, 900));
   await i.editReply({ embeds: [buildRouEmbed(false, mult)], files: [] });
 
-  if (mult > 0) {
+  if (mult > 0 && !test) {
     const win = await clampPayout(bet * mult);
     if (win > 0) {
       if (mix) payoutByMix(i.user.id, win, mix, 'win:roulette');
@@ -1622,19 +1662,21 @@ async function onBaccaratButton(i: ButtonInteraction, kind: string, arg: string)
   return i.showModal(modal);
 }
 
-async function doBaccarat(i: ModalSubmitInteraction, side: BacSide, bet: number, mix?: BetMix) {
+async function doBaccarat(i: ModalSubmitInteraction, side: BacSide, bet: number, mix?: BetMix, test = false) {
   assertNotBanned(i.user.id);
   ensureUser(i.user.id);
   if (bet < 10 || bet > 50_000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
-  if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
+  if (!test && getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
   if (!i.deferred && !i.replied) await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => {});
-  if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:baccarat');
-  else txCredit(i.user.id, -bet, 'bet:baccarat');
+  if (!test) {
+    if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:baccarat');
+    else txCredit(i.user.id, -bet, 'bet:baccarat');
+  }
 
-  const r = dealBaccaratWithCap(side, bet, await housePayoutCap());
+  const r = dealBaccaratWithCap(side, bet, await capFor(test));
   const mult = bacPayout(side, r.winner);
-  const payout = mult > 0 ? await clampPayout(Math.floor(bet * mult)) : 0;
-  if (payout > 0) {
+  const payout = mult > 0 ? await clampFor(Math.floor(bet * mult), test) : 0;
+  if (payout > 0 && !test) {
     if (mix) payoutByMix(i.user.id, payout, mix, 'win:baccarat');
     else txCredit(i.user.id, payout, 'win:baccarat');
   }
@@ -1653,9 +1695,10 @@ async function doBaccarat(i: ModalSubmitInteraction, side: BacSide, bet: number,
     .addFields(
       { name: L('Balance'), value: `${getBalance(i.user.id).toLocaleString()}`, inline: true },
     );
+  if (test) markTest(embed);
   await i.editReply({ embeds: [embed], files: [] });
 
-  if (mult > 1) await onGameSettled(i, 'baccarat', null, bet, payout);
+  if (mult > 1 && !test) await onGameSettled(i, 'baccarat', null, bet, payout);
 }
 
 /* ────────────── VIDEO POKER ────────────── */
@@ -1685,11 +1728,11 @@ async function onVpButton(i: ButtonInteraction, kind: string, arg: string) {
       return updateVpMessage(i, entry.id, entry.bet, st);
     }
     if (kind === 'draw') {
-      if (st.phase === 'deal') drawVPWithCap(st, entry.bet, await housePayoutCap());
+      if (st.phase === 'deal') drawVPWithCap(st, entry.bet, await capFor(!!entry.test));
       await updateVpMessage(i, entry.id, entry.bet, st);
       if (st.phase === 'drawn' && st.rank) {
         const mult = payoutFor(st.rank);
-        if (mult > 0) {
+        if (mult > 0 && !entry.test) {
           const payout = await clampPayout(Math.floor(entry.bet * mult));
           if (payout > 0) {
             if (entry.mix) payoutByMix(i.user.id, payout, entry.mix, 'win:videopoker', sid);
@@ -1703,15 +1746,17 @@ async function onVpButton(i: ButtonInteraction, kind: string, arg: string) {
   }
 }
 
-async function startVpSession(i: ButtonInteraction | ModalSubmitInteraction, bet: number, mix?: BetMix) {
+async function startVpSession(i: ButtonInteraction | ModalSubmitInteraction, bet: number, mix?: BetMix, test = false) {
   ensureUser(i.user.id);
   if (bet < 10 || bet > 50_000) return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
-  if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
-  if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:videopoker');
-  else txCredit(i.user.id, -bet, 'bet:videopoker');
+  if (!test) {
+    if (getBalance(i.user.id) < bet) return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
+    if (mix) applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:videopoker');
+    else txCredit(i.user.id, -bet, 'bet:videopoker');
+  }
 
   const st = startVP();
-  const entry = sessions.create(i.user.id, 'videopoker', st, bet, mix);
+  const entry = sessions.create(i.user.id, 'videopoker', st, bet, mix, test);
   await sendVpEphemeral(i as ButtonInteraction, entry.id, bet, st);
 }
 
@@ -1759,6 +1804,7 @@ async function sendVpEphemeral(i: ButtonInteraction, sid: string, bet: number, s
   });
   const embed = buildVpEmbed(sid, bet, getBalance(i.user.id), st);
   embed.setDescription(`${embed.data.description ?? ''}\n\n${text}`);
+  if (sessions.get(sid)?.test) markTest(embed);
   const rows = st.phase === 'deal' ? vpHoldRow(st.held) : [];
   await (i as any).reply({ embeds: [embed], files: [], components: rows, flags: MessageFlags.Ephemeral });
 }
@@ -1772,6 +1818,7 @@ async function updateVpMessage(i: ButtonInteraction, sid: string, bet: number, s
   });
   const embed = buildVpEmbed(sid, bet, getBalance(i.user.id), st);
   embed.setDescription(`${embed.data.description ?? ''}\n\n${text}`);
+  if (sessions.get(sid)?.test) markTest(embed);
   const rows = st.phase === 'deal' ? vpHoldRow(st.held) : [];
   await i.update({ embeds: [embed], files: [], components: rows, attachments: [] });
 }
@@ -1965,9 +2012,13 @@ async function onPlayButton(i: ButtonInteraction) {
     return i.reply({ content: 'Craps はまだ mix BET に対応していません。`/setup game:craps` のパネルから開始してください。', flags: MessageFlags.Ephemeral });
   }
   const r = getReserves(i.user.id);
-  if (r.total <= 0) {
+  const tester = canTestPlay(i);
+  if (r.total <= 0 && !tester) {
     return i.reply({ content: '残高が 0 です。Cashier で入金してください。', flags: MessageFlags.Ephemeral });
   }
+  const placeholder = tester
+    ? '管理者: 両方 0 でテストプレイ (残高は動きません)'
+    : '0 以上の整数 (使わないなら 0)';
   const subId = sub ? `:${sub}` : '';
   const modal = new ModalBuilder()
     .setCustomId(`play-mix:${game}${subId}`)
@@ -1977,13 +2028,13 @@ async function onPlayButton(i: ButtonInteraction) {
       new TextInputBuilder().setCustomId('pp')
         .setLabel(`PayPay 由来 (保有 ¥${r.pp.toLocaleString()})`)
         .setStyle(TextInputStyle.Short)
-        .setPlaceholder('0 以上の整数 (使わないなら 0)')
+        .setPlaceholder(placeholder)
         .setValue('0').setRequired(true)),
     new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder().setCustomId('ltc')
         .setLabel(`LTC 由来 (保有 ¥${r.ltc.toLocaleString()})`)
         .setStyle(TextInputStyle.Short)
-        .setPlaceholder('0 以上の整数 (使わないなら 0)')
+        .setPlaceholder(placeholder)
         .setValue('0').setRequired(true)),
   ];
   if (game === 'roulette' && sub === 'straight') {
@@ -2002,24 +2053,26 @@ async function handlePlayMixSubmit(i: ModalSubmitInteraction, game: string, sub:
   if (pp === null || ltc === null || pp < 0 || ltc < 0)
     return i.reply({ content: '金額は 0 以上の整数で入力してください', flags: MessageFlags.Ephemeral });
   const total = pp + ltc;
-  if (total <= 0) return i.reply({ content: 'PayPay と LTC のどちらかに 1 以上の金額を入れてください', flags: MessageFlags.Ephemeral });
+  const test = total === 0 && canTestPlay(i);
+  if (total <= 0 && !test) return i.reply({ content: 'PayPay と LTC のどちらかに 1 以上の金額を入れてください', flags: MessageFlags.Ephemeral });
   const r = getReserves(i.user.id);
   if (pp > r.pp)   return i.reply({ content: `PayPay 由来が不足 (保有 ¥${r.pp.toLocaleString()})`, flags: MessageFlags.Ephemeral });
   if (ltc > r.ltc) return i.reply({ content: `LTC 由来が不足 (保有 ¥${r.ltc.toLocaleString()})`, flags: MessageFlags.Ephemeral });
-  const mix: BetMix = { pp, ltc };
+  const mix: BetMix | undefined = test ? undefined : { pp, ltc };
+  const bet = test ? TEST_BET : total;
 
   switch (game) {
-    case 'blackjack':  return startBJ(i, total, mix);
-    case 'slots':      return doSpin(i, total, mix);
-    case 'videopoker': return startVpSession(i, total, mix);
-    case 'baccarat':   return doBaccarat(i, sub as BacSide, total, mix);
+    case 'blackjack':  return startBJ(i, bet, mix, test);
+    case 'slots':      return doSpin(i, bet, mix, test);
+    case 'videopoker': return startVpSession(i, bet, mix, test);
+    case 'baccarat':   return doBaccarat(i, sub as BacSide, bet, mix, test);
     case 'roulette': {
       if (sub === 'straight') {
         const num = parseStrictInt(i.fields.getTextInputValue('num'));
         if (num === null || num < 0 || num > 36) return i.reply({ content: '数字は 0〜36 の整数で入力してください', flags: MessageFlags.Ephemeral });
-        return doRouletteSpin(i, 'number', total, num, mix);
+        return doRouletteSpin(i, 'number', bet, num, mix, test);
       }
-      return doRouletteSpin(i, sub as RouKind, total, undefined, mix);
+      return doRouletteSpin(i, sub as RouKind, bet, undefined, mix, test);
     }
     default: return i.reply({ content: `未対応ゲーム: ${game}`, flags: MessageFlags.Ephemeral });
   }
@@ -2030,9 +2083,10 @@ async function onModal(i: ModalSubmitInteraction) {
     if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
       return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
     const src = i.fields.getTextInputValue('text');
-    const converted = L(src);
-    const body = `**変換結果:**\n\`\`\`\n${converted}\n\`\`\``;
-    return i.reply({ content: body.slice(0, 2000), flags: MessageFlags.Ephemeral });
+    // 中身だけのコードブロックにする。``` が混ざるとブロックが閉じるので崩し、
+    // 2000 文字に収まるよう本文側を切って閉じ記号は必ず残す。
+    const converted = L(src).replace(/```/g, '`​``').slice(0, 2000 - 8);
+    return i.reply({ content: `\`\`\`\n${converted}\n\`\`\``, flags: MessageFlags.Ephemeral });
   }
   if (i.customId.startsWith('play-mix:')) {
     const parts = i.customId.split(':');

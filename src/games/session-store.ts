@@ -7,7 +7,7 @@ import { db } from '../db/schema.js';
 type AnyState = BJState | VPHand | CrapsState | { kind: 'slots'; bet: number };
 
 export interface BetMix { pp: number; ltc: number }
-interface Entry { id: string; discordId: string; game: 'blackjack'|'slots'|'videopoker'|'craps'; state: AnyState; bet: number; mix?: BetMix; }
+interface Entry { id: string; discordId: string; game: 'blackjack'|'slots'|'videopoker'|'craps'; state: AnyState; bet: number; mix?: BetMix; test?: boolean; }
 
 // mix 列を sessions テーブルに追加 (既存 DB の in-place migration)
 try { db.exec(`ALTER TABLE sessions ADD COLUMN mix TEXT`); } catch { /* exists */ }
@@ -18,12 +18,13 @@ const map = new Map<string, Entry>();
 function persist(e: Entry) {
   db.prepare(`INSERT OR REPLACE INTO sessions(id, discord_id, game, state, bet, status, mix, updated_at)
     VALUES (?, ?, ?, ?, ?, 'active', ?, strftime('%s','now'))`)
-    .run(e.id, e.discordId, e.game, JSON.stringify(e.state), e.bet, e.mix ? JSON.stringify(e.mix) : null);
+    // テストプレイは chip を引き落としていないので、再起動時の返金対象にならないよう bet=0 で保存する
+    .run(e.id, e.discordId, e.game, JSON.stringify(e.state), e.test ? 0 : e.bet, e.mix ? JSON.stringify(e.mix) : null);
 }
 
-export function create(discordId: string, game: Entry['game'], state: AnyState, bet: number, mix?: BetMix): Entry {
+export function create(discordId: string, game: Entry['game'], state: AnyState, bet: number, mix?: BetMix, test = false): Entry {
   const id = randomUUID();
-  const e: Entry = { id, discordId, game, state, bet, mix };
+  const e: Entry = { id, discordId, game, state, bet, mix, test };
   map.set(id, e);
   persist(e);
   return e;

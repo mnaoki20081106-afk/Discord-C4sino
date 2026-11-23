@@ -10,11 +10,12 @@ const map = new Map();
 function persist(e) {
     db.prepare(`INSERT OR REPLACE INTO sessions(id, discord_id, game, state, bet, status, mix, updated_at)
     VALUES (?, ?, ?, ?, ?, 'active', ?, strftime('%s','now'))`)
-        .run(e.id, e.discordId, e.game, JSON.stringify(e.state), e.bet, e.mix ? JSON.stringify(e.mix) : null);
+        // テストプレイは chip を引き落としていないので、再起動時の返金対象にならないよう bet=0 で保存する
+        .run(e.id, e.discordId, e.game, JSON.stringify(e.state), e.test ? 0 : e.bet, e.mix ? JSON.stringify(e.mix) : null);
 }
-export function create(discordId, game, state, bet, mix) {
+export function create(discordId, game, state, bet, mix, test = false) {
     const id = randomUUID();
-    const e = { id, discordId, game, state, bet, mix };
+    const e = { id, discordId, game, state, bet, mix, test };
     map.set(id, e);
     persist(e);
     return e;
