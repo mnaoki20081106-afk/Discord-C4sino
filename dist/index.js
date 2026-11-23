@@ -8,7 +8,7 @@ import { spinRouletteWithCap, payoutMult as rouPayout } from './games/roulette.j
 import { dealBaccaratWithCap, payoutMult as bacPayout } from './games/baccarat.js';
 import { startVP, drawVPWithCap, payoutFor } from './games/videopoker.js';
 import { newCraps, addBet, roll as crapsRoll, openExposure } from './games/craps.js';
-import { formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker } from './ui/format-games.js';
+import { formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker, crapsDiceLine } from './ui/format-games.js';
 import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, depositMethodPicker, withdrawMethodPicker, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel, mwsPanel, mwsWarningText } from './ui/panels.js';
 import * as mws from './mws/timer.js';
 import * as pp from './payments/paypay-client.js';
@@ -1517,7 +1517,7 @@ function buildCrapsEmbed(sid, st, balance) {
     const embed = new EmbedBuilder()
         .setTitle(`🎲 ${L('CRAPS')}`)
         .setColor(color)
-        .setDescription(header)
+        .setDescription(st.lastRoll ? `${crapsDiceLine(st.lastRoll[0], st.lastRoll[1])}\n${header}` : header)
         .addFields({ name: `アクティブなベット (${st.bets.length})`, value: betsText, inline: false }, { name: '直近の振り', value: histText.length > 1000 ? histText.slice(-1000) : histText, inline: false }, { name: L('Balance'), value: `${balance.toLocaleString()} ${L('chips')}`, inline: true }, { name: '累計', value: `${net >= 0 ? '+' : ''}${net.toLocaleString()} (賭 ${st.totalWagered.toLocaleString()} / 戻 ${st.totalReturned.toLocaleString()})`, inline: true })
         .setFooter({ text: `sid=${sid}` });
     return sessions.get(sid)?.test ? markTest(embed) : embed;

@@ -14,7 +14,7 @@ import { spinRoulette, spinRouletteWithCap, payoutMult as rouPayout, type BetKin
 import { dealBaccarat, dealBaccaratWithCap, payoutMult as bacPayout, type Side as BacSide } from './games/baccarat.js';
 import { startVP, drawVP, drawVPWithCap, payoutFor, type VPHand } from './games/videopoker.js';
 import { newCraps, addBet, roll as crapsRoll, openExposure, type CrapsBetKind, type CrapsState, type CrapsBet } from './games/craps.js';
-import { formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker, formatCraps } from './ui/format-games.js';
+import { formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker, formatCraps, crapsDiceLine } from './ui/format-games.js';
 import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, depositMethodPicker, withdrawMethodPicker, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel, mwsPanel, mwsWarningText } from './ui/panels.js';
 import * as mws from './mws/timer.js';
 import * as pp from './payments/paypay-client.js';
@@ -1573,7 +1573,7 @@ function buildCrapsEmbed(sid: string, st: CrapsState, balance: number): EmbedBui
   const embed = new EmbedBuilder()
     .setTitle(`🎲 ${L('CRAPS')}`)
     .setColor(color)
-    .setDescription(header)
+    .setDescription(st.lastRoll ? `${crapsDiceLine(st.lastRoll[0], st.lastRoll[1])}\n${header}` : header)
     .addFields(
       { name: `アクティブなベット (${st.bets.length})`, value: betsText, inline: false },
       { name: '直近の振り', value: histText.length > 1000 ? histText.slice(-1000) : histText, inline: false },

@@ -37,6 +37,10 @@ function suitGlyph(s) { return ({ S: '♠', H: '♥', D: '♦', C: '♣' })[s]; 
 function row(cards) {
     return cards.map(cardEmoji).join(' ');
 }
+/** 絵文字だけの行を Discord の最大見出し (#) で大きく表示する。文字は混ぜないこと。 */
+function big(emojis) {
+    return `# ${emojis}`;
+}
 export function formatBlackjack(i) {
     const lines = [];
     // Dealer
@@ -44,7 +48,7 @@ export function formatBlackjack(i) {
         ? [i.dealer[0], 'back', ...i.dealer.slice(2)]
         : i.dealer;
     lines.push(`**Dealer**`);
-    lines.push(row(dealerCards));
+    lines.push(big(row(dealerCards)));
     lines.push('');
     // Player (split 対応)
     i.player.forEach((hand, idx) => {
@@ -53,7 +57,7 @@ export function formatBlackjack(i) {
             : '';
         const label = i.player.length > 1 ? `**Hand ${idx + 1}** (bet ${i.bets[idx].toLocaleString()})` : `**You** (bet ${i.bets[idx].toLocaleString()})`;
         lines.push(`${marker}${label}`);
-        lines.push(`${marker}${row(hand)}`);
+        lines.push(big(row(hand)));
         if (i.results?.[idx]) {
             const res = i.results[idx];
             const resLabel = res === 'bj' ? '✨ BLACKJACK' : res === 'win' ? '✅ WIN' : res === 'push' ? '➖ PUSH' : '❌ LOSE';
@@ -73,7 +77,7 @@ function slotEmoji(s) {
 }
 export function formatSlots(i) {
     const lines = [];
-    lines.push(`${slotEmoji(i.reels[0])} ┃ ${slotEmoji(i.reels[1])} ┃ ${slotEmoji(i.reels[2])}`);
+    lines.push(big(`${slotEmoji(i.reels[0])} ${slotEmoji(i.reels[1])} ${slotEmoji(i.reels[2])}`));
     if (!i.spinning) {
         if (i.payoutMult > 0) {
             const win = i.bet * i.payoutMult;
@@ -102,7 +106,8 @@ export function formatRoulette(i) {
         lines.push(`🎡 spinning…  bet: **${i.betLabel}**`);
     }
     else {
-        lines.push(`Result:  ${num}  _(${color})_`);
+        lines.push(`Result  _(${color})_`);
+        lines.push(big(num));
         const win = i.betAmount * i.payoutMult;
         const net = win - i.betAmount;
         if (i.payoutMult > 0) {
@@ -120,24 +125,23 @@ export function formatBaccarat(i) {
     const msg = net > 0 ? `**+${net.toLocaleString()} chips**` : net < 0 ? `**${net.toLocaleString()} chips**` : '**PUSH**';
     return [
         `**Player** (${i.playerTotal})`,
-        row(i.player),
+        big(row(i.player)),
         '',
         `**Banker** (${i.bankerTotal})`,
-        row(i.banker),
+        big(row(i.banker)),
         '',
         `${winnerLabel}  —  ${msg}  (bet ${i.side} ${i.bet.toLocaleString()})`,
     ].join('\n');
 }
 export function formatVideoPoker(i) {
     const cards = i.hand.cards.map(c => cardEmoji(c));
-    const holdRow = i.hand.held
-        .map(h => h ? '🔒' : '　')
-        .join('   ');
+    const heldPos = i.hand.held.flatMap((h, idx) => h ? [`${idx + 1}`] : []);
     const lines = [
-        cards.join(' '),
+        big(cards.join(' ')),
     ];
-    if (i.phase === 'deal')
-        lines.push(`${holdRow}   _(HOLD を選んで DRAW)_`);
+    if (i.phase === 'deal') {
+        lines.push(heldPos.length ? `HOLD 中: ${heldPos.join(', ')} 枚目  _(DRAW で引き直し)_` : '_HOLD を選んで DRAW_');
+    }
     if (i.phase === 'drawn') {
         if (i.payoutMult && i.payoutMult > 0) {
             lines.push(`**${i.rankLabel ?? ''}**  +${(i.bet * i.payoutMult).toLocaleString()} chips  (${i.payoutMult}x)`);
@@ -151,9 +155,14 @@ export function formatVideoPoker(i) {
 function diceEmoji(n) {
     return emoji(`dice_${n}`) || (['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'][n] ?? String(n));
 }
+/** 直近の出目を大きく表示する行。 */
+export function crapsDiceLine(d1, d2) {
+    return big(`${diceEmoji(d1)} ${diceEmoji(d2)}`);
+}
 export function formatCraps(i) {
     const lines = [];
-    lines.push(`${diceEmoji(i.dice[0])} ${diceEmoji(i.dice[1])}   = **${i.total}**`);
+    lines.push(crapsDiceLine(i.dice[0], i.dice[1]));
+    lines.push(`= **${i.total}**`);
     lines.push(i.phase === 'comeout' ? '_(Come-out roll)_' : `_(Point: **${i.point}**)_`);
     if (i.log?.length) {
         lines.push('');
