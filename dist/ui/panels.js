@@ -71,6 +71,10 @@ export function videopokerPanel() {
     const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('vp:deal:100').setLabel(`DEAL 100`).setStyle(ButtonStyle.Secondary), new ButtonBuilder().setCustomId('vp:deal:500').setLabel(`DEAL 500`).setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId('vp:deal:1000').setLabel(`DEAL 1,000`).setStyle(ButtonStyle.Primary), new ButtonBuilder().setCustomId('vp:deal:5000').setLabel(`DEAL 5,000`).setStyle(ButtonStyle.Danger), new ButtonBuilder().setCustomId('vp:deal:custom').setLabel('CUSTOM').setStyle(ButtonStyle.Success));
     return { embeds: [embed], components: [row] };
 }
+/** リザルト画面の Replay ボタン。sub は前回の賭け方 (バカラのサイド、ルーレットの掛け方)。 */
+export function replayRow(game, sub) {
+    return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`replay:${game}${sub ? `:${sub}` : ''}`).setLabel('Replay').setStyle(ButtonStyle.Primary));
+}
 export function vpHoldRow(held, cards) {
     const row1 = new ActionRowBuilder();
     for (let i = 0; i < 5; i++) {

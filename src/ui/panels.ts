@@ -136,6 +136,13 @@ export function videopokerPanel() {
   return { embeds: [embed], components: [row] };
 }
 
+/** リザルト画面の Replay ボタン。sub は前回の賭け方 (バカラのサイド、ルーレットの掛け方)。 */
+export function replayRow(game: string, sub?: string): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`replay:${game}${sub ? `:${sub}` : ''}`).setLabel('Replay').setStyle(ButtonStyle.Primary),
+  );
+}
+
 export function vpHoldRow(held: boolean[], cards: Card[]): ActionRowBuilder<ButtonBuilder>[] {
   const row1 = new ActionRowBuilder<ButtonBuilder>();
   for (let i = 0; i < 5; i++) {

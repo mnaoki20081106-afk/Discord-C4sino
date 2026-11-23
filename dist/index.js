@@ -9,7 +9,7 @@ import { dealBaccaratWithCap, payoutMult as bacPayout } from './games/baccarat.j
 import { startVP, drawVPWithCap, payoutFor } from './games/videopoker.js';
 import { newCraps, addBet, roll as crapsRoll, openExposure } from './games/craps.js';
 import { formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker, crapsDiceLine } from './ui/format-games.js';
-import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, depositMethodPicker, withdrawMethodPicker, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel, mwsPanel, mwsWarningText } from './ui/panels.js';
+import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, depositMethodPicker, withdrawMethodPicker, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel, mwsPanel, mwsWarningText, replayRow } from './ui/panels.js';
 import * as mws from './mws/timer.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
@@ -889,6 +889,8 @@ async function onButton(i) {
     const [ns, kind, arg] = i.customId.split(':');
     if (ns === 'play')
         return onPlayButton(i); // play:<game>[:<subarg>]
+    if (ns === 'replay')
+        return onReplayButton(i); // replay:<game>[:<sub>]
     if (ns === 'leet' && kind === 'convert')
         return onLeetButton(i);
     if (ns === 'bj')
@@ -1057,6 +1059,49 @@ function markTest(embed) {
     embed.setDescription(`**テストプレイ** — 仮の BET ${TEST_BET} で計算。残高・履歴・実績には反映されません\n\n${embed.data.description ?? ''}`);
     return embed;
 }
+/* ────────────── REPLAY (リザルト画面 → 金額入力 → 次のゲームで画面を置き換え) ────────────── */
+/** リザルト画面の Replay → 金額入力から来た送信か。そうならリザルト画面を次のゲームで書き換える。 */
+function isReplay(i) {
+    return i.isModalSubmit() && i.customId.startsWith('replay:') && i.isFromMessage();
+}
+/** ゲームの最初の表示。Replay ならリザルト画面を置き換え、それ以外は本人だけに見える新しい画面。 */
+async function firstReply(i, payload) {
+    if (isReplay(i) && i.isFromMessage())
+        return i.update({ ...payload, files: [], attachments: [] });
+    return i.reply({ ...payload, flags: MessageFlags.Ephemeral });
+}
+/** 時間のかかるゲーム用の先行応答。以降の editReply は、Replay ならリザルト画面を書き換える。 */
+async function deferFirst(i) {
+    if (i.deferred || i.replied)
+        return;
+    if (isReplay(i) && i.isFromMessage())
+        await i.deferUpdate().catch(() => { });
+    else
+        await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => { });
+}
+/** Replay ボタン: 前回と同じ賭け方で金額入力を開く。クラップスは新しい台をその場で開く。 */
+async function onReplayButton(i) {
+    assertNotBanned(i.user.id);
+    ensureUser(i.user.id);
+    const parts = i.customId.split(':'); // replay:<game>[:<sub>]
+    const game = parts[1];
+    const sub = parts.slice(2).join(':');
+    if (game === 'craps') {
+        const st = newCraps();
+        const entry = sessions.create(i.user.id, 'craps', st, 0);
+        setCrapsExposure(entry.id, 0);
+        sessions.save(entry.id);
+        const rows = crapsControlRows({ phase: st.phase, point: st.point, betCount: 0 });
+        return i.update({ embeds: [buildCrapsEmbed(entry.id, st, getBalance(i.user.id))], files: [], components: rows, attachments: [] });
+    }
+    if (getReserves(i.user.id).total <= 0 && !canTestPlay(i)) {
+        return i.reply({ content: '残高が 0 です。Cashier で入金してください。', flags: MessageFlags.Ephemeral });
+    }
+    const extra = game === 'roulette' && sub === 'straight'
+        ? [new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('num').setLabel('数字 (0〜36)').setStyle(TextInputStyle.Short).setRequired(true))]
+        : [];
+    return i.showModal(betMixModal(i, i.customId, `${game.toUpperCase()} — BET 金額`, extra));
+}
 async function onBJButton(i, kind, arg) {
     if (kind === 'bet') {
         assertNotBanned(i.user.id);
@@ -1160,7 +1205,9 @@ async function sendBJEphemeral(i, sid, st) {
     const rows = [];
     if (st.phase === 'player')
         rows.push(bjActionsRow(availableActions(st)));
-    await i.reply({ embeds: [embed], components: rows, flags: MessageFlags.Ephemeral });
+    if (st.phase === 'done')
+        rows.push(replayRow('blackjack'));
+    await firstReply(i, { embeds: [embed], components: rows });
     if (st.phase === 'done') {
         if (test) {
             sessions.drop(sid);
@@ -1290,6 +1337,8 @@ async function updateBJMessage(i, sid, st) {
     const rows = [];
     if (st.phase === 'player')
         rows.push(bjActionsRow(availableActions(st)));
+    if (st.phase === 'done')
+        rows.push(replayRow('blackjack'));
     await i.update({ embeds: [embed], files: [], components: rows, attachments: [] });
     if (st.phase === 'done') {
         if (test) {
@@ -1325,8 +1374,7 @@ async function doSpin(i, bet, mix, test = false) {
     if (!test && getBalance(i.user.id) < bet)
         return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
     // 3秒 ACK 期限対策: 外部 API 呼び出し前に defer しておく
-    if (!i.deferred && !i.replied)
-        await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => { });
+    await deferFirst(i);
     if (!test) {
         if (mix)
             applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:slots');
@@ -1346,7 +1394,7 @@ async function doSpin(i, bet, mix, test = false) {
             .addFields({ name: L('Bet'), value: `${bet.toLocaleString()}`, inline: true }, { name: L('Balance'), value: `${getBalance(i.user.id).toLocaleString()}`, inline: true });
         return test ? markTest(embed) : embed;
     };
-    await i.editReply({ embeds: [mkEmbed([stripA[0], stripB[0], stripC[0]], true, 0)], files: [] });
+    await i.editReply({ embeds: [mkEmbed([stripA[0], stripB[0], stripC[0]], true, 0)], files: [], components: [] });
     const frames = [
         [3, 5, 7],
         [stripA.length - 1, 7, 9],
@@ -1362,6 +1410,7 @@ async function doSpin(i, bet, mix, test = false) {
         await i.editReply({
             embeds: [mkEmbed([stripA[ia], stripB[ib], stripC[ic]], spinning, spinning ? 0 : result.payoutMult, label)],
             files: [],
+            components: spinning ? [] : [replayRow('slots')],
         });
     }
     if (result.payoutMult > 0 && !test) {
@@ -1415,8 +1464,7 @@ async function doRouletteSpin(i, kind, bet, number, mix, test = false) {
         return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
     if (kind === 'number' && (number === undefined || number < 0 || number > 36))
         return i.reply({ content: '数字は 0 〜 36 です', flags: MessageFlags.Ephemeral });
-    if (!i.deferred && !i.replied)
-        await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => { });
+    await deferFirst(i);
     if (!test) {
         if (mix)
             applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:roulette');
@@ -1440,9 +1488,12 @@ async function doRouletteSpin(i, kind, bet, number, mix, test = false) {
         return test ? markTest(embed) : embed;
     };
     // 回転演出なし (絵文字表示なので 2 フレームだけ: spinning → result)
-    await i.editReply({ embeds: [buildRouEmbed(true, 0)], files: [] });
+    await i.editReply({ embeds: [buildRouEmbed(true, 0)], files: [], components: [] });
     await new Promise(r => setTimeout(r, 900));
-    await i.editReply({ embeds: [buildRouEmbed(false, mult)], files: [] });
+    await i.editReply({
+        embeds: [buildRouEmbed(false, mult)], files: [],
+        components: [replayRow('roulette', kind === 'number' ? 'straight' : kind)],
+    });
     if (mult > 0 && !test) {
         const win = await clampPayout(bet * mult);
         if (win > 0) {
@@ -1496,7 +1547,7 @@ async function onCrapsButton(i, kind, _arg) {
             .setDescription(`累計 ${net >= 0 ? '+' : ''}${net.toLocaleString()} ${L('chips')} (賭 ${st.totalWagered.toLocaleString()} / 戻 ${st.totalReturned.toLocaleString()})`);
         if (entry.test)
             markTest(embed);
-        return i.update({ embeds: [embed], files: [], components: [], attachments: [] });
+        return i.update({ embeds: [embed], files: [], components: [replayRow('craps')], attachments: [] });
     }
     if (kind === 'roll') {
         if (st.bets.length === 0)
@@ -1663,8 +1714,7 @@ async function doBaccarat(i, side, bet, mix, test = false) {
         return i.reply({ content: `${L('BET')} は 10 〜 50,000`, flags: MessageFlags.Ephemeral });
     if (!test && getBalance(i.user.id) < bet)
         return i.reply({ content: '残高不足', flags: MessageFlags.Ephemeral });
-    if (!i.deferred && !i.replied)
-        await i.deferReply({ flags: MessageFlags.Ephemeral }).catch(() => { });
+    await deferFirst(i);
     if (!test) {
         if (mix)
             applyMix(i.user.id, -mix.pp, -mix.ltc, 'bet:baccarat');
@@ -1694,7 +1744,7 @@ async function doBaccarat(i, side, bet, mix, test = false) {
         .addFields({ name: L('Balance'), value: `${getBalance(i.user.id).toLocaleString()}`, inline: true });
     if (test)
         markTest(embed);
-    await i.editReply({ embeds: [embed], files: [] });
+    await i.editReply({ embeds: [embed], files: [], components: [replayRow('baccarat', side)] });
     if (mult > 1 && !test)
         await onGameSettled(i, 'baccarat', null, bet, payout);
 }
@@ -1801,8 +1851,8 @@ async function sendVpEphemeral(i, sid, bet, st) {
     embed.setDescription(`${embed.data.description ?? ''}\n\n${text}`);
     if (sessions.get(sid)?.test)
         markTest(embed);
-    const rows = st.phase === 'deal' ? vpHoldRow(st.held, st.cards) : [];
-    await i.reply({ embeds: [embed], files: [], components: rows, flags: MessageFlags.Ephemeral });
+    const rows = st.phase === 'deal' ? vpHoldRow(st.held, st.cards) : [replayRow('videopoker')];
+    await firstReply(i, { embeds: [embed], components: rows });
 }
 async function updateVpMessage(i, sid, bet, st) {
     sessions.save(sid);
@@ -1815,7 +1865,7 @@ async function updateVpMessage(i, sid, bet, st) {
     embed.setDescription(`${embed.data.description ?? ''}\n\n${text}`);
     if (sessions.get(sid)?.test)
         markTest(embed);
-    const rows = st.phase === 'deal' ? vpHoldRow(st.held, st.cards) : [];
+    const rows = st.phase === 'deal' ? vpHoldRow(st.held, st.cards) : [replayRow('videopoker')];
     await i.update({ embeds: [embed], files: [], components: rows, attachments: [] });
 }
 /* ────────────── CASHIER (ユーザー出金) ────────────── */
@@ -2005,7 +2055,7 @@ async function onModal(i) {
         const converted = L(src).replace(/```/g, '`​``').slice(0, 2000 - 8);
         return i.reply({ content: `\`\`\`\n${converted}\n\`\`\``, flags: MessageFlags.Ephemeral });
     }
-    if (i.customId.startsWith('play-mix:')) {
+    if (i.customId.startsWith('play-mix:') || i.customId.startsWith('replay:')) {
         const parts = i.customId.split(':');
         const game = parts[1];
         const sub = parts.slice(2).join(':');
