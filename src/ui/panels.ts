@@ -136,11 +136,23 @@ export function videopokerPanel() {
   return { embeds: [embed], components: [row] };
 }
 
-/** リザルト画面の Replay ボタン。sub は前回の賭け方 (バカラのサイド、ルーレットの掛け方)。 */
+/**
+ * リザルト画面 / 入金完了画面の [Replay] [入金] ボタン。
+ * sub は前回の賭け方 (バカラのサイド、ルーレットの掛け方)。
+ * どのゲームに戻るか (ctx = <game>[:<sub>]) を両方のボタンに埋め込んで持ち回る。
+ */
 export function replayRow(game: string, sub?: string): ActionRowBuilder<ButtonBuilder> {
+  const ctx = `${game}${sub ? `:${sub}` : ''}`;
   return new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId(`replay:${game}${sub ? `:${sub}` : ''}`).setLabel('Replay').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`replay:${ctx}`).setLabel('Replay').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`dep:open:${ctx}`).setLabel('入金').setStyle(ButtonStyle.Success),
   );
+}
+
+/** replayRow を ctx (<game>[:<sub>]) から作る。 */
+export function replayRowFromCtx(ctx: string): ActionRowBuilder<ButtonBuilder> {
+  const [game, ...rest] = ctx.split(':');
+  return replayRow(game, rest.join(':') || undefined);
 }
 
 export function vpHoldRow(held: boolean[], cards: Card[]): ActionRowBuilder<ButtonBuilder>[] {
@@ -442,10 +454,12 @@ export function depositPanel() {
 }
 
 /** 「入金」ボタンから開く支払い方法選択 (ephemeral)。 */
-export function depositMethodPicker() {
+export function depositMethodPicker(ctx = '') {
+  // ctx があればゲームのリザルト画面から来た入金。完了画面で同じゲームに Replay できるよう持ち回る。
+  const suffix = ctx ? `:${ctx}` : '';
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('dep:paypay').setLabel('PayPay').setStyle(ButtonStyle.Success).setEmoji('🅿️'),
-    new ButtonBuilder().setCustomId('dep:ltc').setLabel('LTC').setStyle(ButtonStyle.Success).setEmoji('🪙'),
+    new ButtonBuilder().setCustomId(`dep:paypay${suffix}`).setLabel('PayPay').setStyle(ButtonStyle.Success).setEmoji('🅿️'),
+    new ButtonBuilder().setCustomId(`dep:ltc${suffix}`).setLabel('LTC').setStyle(ButtonStyle.Success).setEmoji('🪙'),
   );
   return { content: '入金方法を選択してください', components: [row] };
 }

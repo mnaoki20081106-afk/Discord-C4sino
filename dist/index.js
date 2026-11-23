@@ -9,7 +9,7 @@ import { dealBaccaratWithCap, payoutMult as bacPayout } from './games/baccarat.j
 import { startVP, drawVPWithCap, payoutFor } from './games/videopoker.js';
 import { newCraps, addBet, roll as crapsRoll, openExposure } from './games/craps.js';
 import { formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker, crapsDiceLine } from './ui/format-games.js';
-import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, depositMethodPicker, withdrawMethodPicker, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel, mwsPanel, mwsWarningText, replayRow } from './ui/panels.js';
+import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, depositMethodPicker, withdrawMethodPicker, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel, mwsPanel, mwsWarningText, replayRow, replayRowFromCtx } from './ui/panels.js';
 import * as mws from './mws/timer.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
@@ -906,7 +906,7 @@ async function onButton(i) {
     if (ns === 'cr')
         return onCrapsButton(i, kind, arg);
     if (ns === 'dep')
-        return onDepositButton(i, kind, arg);
+        return onDepositButton(i, kind, i.customId.split(':').slice(2).join(':'));
     if (ns === 'adm')
         return onAdminButton(i, kind);
     if (ns === 'wd' && (kind === 'approve' || kind === 'reject'))
@@ -1881,14 +1881,15 @@ async function openLtcWithdrawModal(i) {
     await i.showModal(modal);
 }
 /* ────────────── CASHIER (ユーザー入金) ────────────── */
-async function onDepositButton(i, kind, _arg) {
+/** ctx (<game>[:<sub>]) はゲームのリザルト画面から来た入金のとき。完了画面に同じゲームの Replay を付ける。 */
+async function onDepositButton(i, kind, ctx) {
     assertNotBanned(i.user.id);
     if (kind === 'open')
-        return i.reply({ ...depositMethodPicker(), flags: MessageFlags.Ephemeral });
+        return i.reply({ ...depositMethodPicker(ctx), flags: MessageFlags.Ephemeral });
     if (kind === 'paypay')
-        return openPaypayDepositModal(i);
+        return openPaypayDepositModal(i, ctx);
     if (kind === 'ltc')
-        return showLtcAddress(i);
+        return showLtcAddress(i, ctx);
 }
 async function onWithdrawUserButton(i, kind) {
     assertNotBanned(i.user.id);
@@ -1919,20 +1920,32 @@ async function onSelect(i) {
         return i.showModal(betMixModal(i, `cr:bet:${sid}:${kind}`, `${L('CRAPS')} — ${kind}`));
     }
 }
-async function openPaypayDepositModal(i) {
-    const modal = new ModalBuilder().setCustomId('dep:paypay').setTitle('PayPay 送金リンク入金')
+async function openPaypayDepositModal(i, ctx = '') {
+    const modal = new ModalBuilder().setCustomId(`dep:paypay${ctx ? `:${ctx}` : ''}`).setTitle('PayPay 送金リンク入金')
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel('送金リンク URL または ID').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('pin').setLabel('パスコード (設定していれば)').setStyle(TextInputStyle.Short).setRequired(false)));
     await i.showModal(modal);
 }
 /** LTC 選択時: 直接モーダルを開いて JPY を入力させる (空欄なら見積なしでアドレスだけ返す) */
-async function showLtcAddress(i) {
-    const modal = new ModalBuilder().setCustomId('dep:ltc').setTitle('LTC 入金')
+async function showLtcAddress(i, ctx = '') {
+    const modal = new ModalBuilder().setCustomId(`dep:ltc${ctx ? `:${ctx}` : ''}`).setTitle('LTC 入金')
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('jpy').setLabel('入金したい金額 (JPY) — 空欄で見積なし')
         .setStyle(TextInputStyle.Short).setPlaceholder('例: 5000').setRequired(false)));
     await i.showModal(modal);
 }
-async function replyLtcQuote(i, jpy) {
-    await i.deferReply({ flags: MessageFlags.Ephemeral });
+async function replyLtcQuote(i, jpy, ctx = '') {
+    const inPlace = !!ctx && i.isModalSubmit() && i.isFromMessage();
+    if (inPlace && i.isModalSubmit() && i.isFromMessage())
+        await i.deferUpdate();
+    else
+        await i.deferReply({ flags: MessageFlags.Ephemeral });
+    const replayNote = '着金は 1 承認後に自動で残高へ反映され、DM でお知らせします。着金後に Replay でゲームに戻れます。';
+    const rows = ctx ? [replayRowFromCtx(ctx)] : [];
+    const fail = (msg) => i.editReply({ content: msg, embeds: [], components: rows });
+    const show = (embed) => {
+        if (ctx)
+            embed.setDescription(`${embed.data.description ? `${embed.data.description}\n\n` : ''}${replayNote}`);
+        return i.editReply({ content: '', embeds: [embed], components: rows });
+    };
     const addr = await getOrCreateAddress(i.user.id);
     const rate = await ltcJpyRate().catch(() => null);
     // JPY 未指定: アドレス + 現在レートのみ返す
@@ -1942,16 +1955,16 @@ async function replyLtcQuote(i, jpy) {
             .setDescription('下記アドレスに LTC を送金してください。**1承認で自動チャージ**されます。')
             .setColor(0x345d9d)
             .addFields({ name: 'Address', value: `\`${addr}\`` }, { name: L('Rate'), value: rate ? `1 LTC ≈ ¥${rate.toLocaleString()}` : '⚠️ レート取得失敗' });
-        return i.editReply({ embeds: [embed] });
+        return show(embed);
     }
     if (!Number.isFinite(jpy) || jpy <= 0)
-        return i.editReply('❌ 金額が不正');
+        return fail('❌ 金額が不正');
     if (jpy < MIN_DEPOSIT_JPY.ltc)
-        return i.editReply(`❌ LTC の最低入金額は ¥${MIN_DEPOSIT_JPY.ltc.toLocaleString()} です`);
+        return fail(`❌ LTC の最低入金額は ¥${MIN_DEPOSIT_JPY.ltc.toLocaleString()} です`);
     if (jpy > 10_000_000)
-        return i.editReply('❌ 金額が大きすぎます');
+        return fail('❌ 金額が大きすぎます');
     if (!rate)
-        return i.editReply('⚠️ レート取得失敗。しばらく経って再度お試しください。');
+        return fail('⚠️ レート取得失敗。しばらく経って再度お試しください。');
     const ltc = +(jpy / rate).toFixed(8);
     const fee = 0.0001;
     const total = +(ltc + fee).toFixed(8);
@@ -1961,7 +1974,7 @@ async function replyLtcQuote(i, jpy) {
         .setColor(0x345d9d)
         .addFields({ name: 'Address', value: `\`${addr}\``, inline: false }, { name: 'Send (LTC)', value: `\`${ltc}\` LTC`, inline: true }, { name: 'Est. fee', value: `~\`${fee.toFixed(8)}\` LTC`, inline: true }, { name: 'Total send', value: `~\`${total}\` LTC`, inline: true }, { name: L('Rate'), value: `1 LTC ≈ ¥${rate.toLocaleString()}`, inline: false }, { name: 'Payment URI', value: `\`\`\`\n${uri}\n\`\`\``, inline: false })
         .setFooter({ text: 'ネットワーク手数料で差分が出ます。実際に着金した金額でチャージされます。' });
-    await i.editReply({ embeds: [embed] });
+    await show(embed);
 }
 async function processPaypayDeposit(discordId, linkInput, passcode) {
     const code = pp.extractLinkId(linkInput);
@@ -2110,11 +2123,11 @@ async function onModal(i) {
             return;
         return doSpin(i, b.bet, b.mix, b.test);
     }
-    if (i.customId === 'dep:ltc') {
+    if (i.customId === 'dep:ltc' || i.customId.startsWith('dep:ltc:')) {
         assertNotBanned(i.user.id);
         const raw = i.fields.getTextInputValue('jpy').replace(/[,\s¥]/g, '');
         const jpy = raw === '' ? null : parseInt(raw, 10);
-        return replyLtcQuote(i, jpy);
+        return replyLtcQuote(i, jpy, i.customId.split(':').slice(2).join(':'));
     }
     if (i.customId.startsWith('wd:approve:')) {
         if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
@@ -2174,17 +2187,24 @@ async function onModal(i) {
             await i.editReply(`❌ ${e.message}`);
         }
     }
-    if (i.customId === 'dep:paypay') {
+    if (i.customId === 'dep:paypay' || i.customId.startsWith('dep:paypay:')) {
         assertNotBanned(i.user.id);
+        const ctx = i.customId.split(':').slice(2).join(':');
         const url = i.fields.getTextInputValue('url');
         const pin = i.fields.getTextInputValue('pin').trim() || undefined;
-        await i.deferReply({ flags: MessageFlags.Ephemeral });
+        // ゲームから来た入金は、入金方法の選択画面をそのまま完了画面に書き換えて Replay を付ける
+        const inPlace = !!ctx && i.isFromMessage();
+        if (inPlace && i.isFromMessage())
+            await i.deferUpdate();
+        else
+            await i.deferReply({ flags: MessageFlags.Ephemeral });
+        const rows = ctx ? [replayRowFromCtx(ctx)] : [];
         try {
             const r = await processPaypayDeposit(i.user.id, url, pin);
-            await i.editReply(`✅ PayPay ¥${r.amount.toLocaleString()} を受領（wallet: \`${r.wallet}\`）。残高に加算しました。`);
+            await i.editReply({ content: `✅ PayPay ¥${r.amount.toLocaleString()} を受領（wallet: \`${r.wallet}\`）。残高に加算しました。`, embeds: [], components: rows });
         }
         catch (e) {
-            await i.editReply(`❌ ${e.message}`);
+            await i.editReply({ content: `❌ ${e.message}`, embeds: [], components: rows });
         }
     }
     if (i.customId.startsWith('wallet:paypay:start:')) {
