@@ -11,7 +11,6 @@
     "register": "tsx src/register-commands.ts"
   },
   "dependencies": {
-    "@napi-rs/canvas": "^0.1.60",
     "@noble/hashes": "^1.5.0",
     "@noble/secp256k1": "^2.1.0",
     "axios": "^1.7.9",
