@@ -1,0 +1,60 @@
+import { randomUUID } from 'node:crypto';
+import { db } from '../db/schema.js';
+// mix 列を sessions テーブルに追加 (既存 DB の in-place migration)
+try {
+    db.exec(`ALTER TABLE sessions ADD COLUMN mix TEXT`);
+}
+catch { /* exists */ }
+const map = new Map();
+/** DB に write-through して永続化 */
+function persist(e) {
+    db.prepare(`INSERT OR REPLACE INTO sessions(id, discord_id, game, state, bet, status, mix, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'active', ?, strftime('%s','now'))`)
+        .run(e.id, e.discordId, e.game, JSON.stringify(e.state), e.bet, e.mix ? JSON.stringify(e.mix) : null);
+}
+export function create(discordId, game, state, bet, mix) {
+    const id = randomUUID();
+    const e = { id, discordId, game, state, bet, mix };
+    map.set(id, e);
+    persist(e);
+    return e;
+}
+export const get = (id) => map.get(id);
+/** セッション状態を更新したあとに呼ぶ (mutation 後の write-through)。 */
+export function save(id) {
+    const e = map.get(id);
+    if (e)
+        persist(e);
+}
+export function drop(id) {
+    map.delete(id);
+    db.prepare('DELETE FROM sessions WHERE id=?').run(id);
+}
+export function listByUser(discordId) {
+    const out = [];
+    for (const e of map.values())
+        if (e.discordId === discordId)
+            out.push(e);
+    return out;
+}
+/**
+ * 起動時: active のまま残っているセッションは再開不可として abandoned に遷移 + BET を refund する。
+ * BJ/VP/Craps の進行中の chip が再起動で消えないことを保証する。
+ * refundBet は index.ts 側から渡す (dep cycle 回避)。
+ */
+export function recoverActiveSessions(refundBet) {
+    const rows = db.prepare(`SELECT id, discord_id, game, bet FROM sessions WHERE status='active'`).all();
+    if (!rows.length)
+        return;
+    for (const r of rows) {
+        try {
+            if (r.bet > 0)
+                refundBet(r.discord_id, r.bet, `refund:session-abandoned:${r.game}`, r.id);
+            db.prepare(`UPDATE sessions SET status='abandoned', updated_at=strftime('%s','now') WHERE id=?`).run(r.id);
+            console.log(`[sessions] recovered: abandoned+refunded ${r.id} (${r.game}, user=${r.discord_id}, bet=${r.bet})`);
+        }
+        catch (e) {
+            console.error(`[sessions] recover failed for ${r.id}:`, e.message);
+        }
+    }
+}
