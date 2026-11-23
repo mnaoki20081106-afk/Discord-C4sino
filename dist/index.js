@@ -1003,6 +1003,17 @@ const TEST_BET = 100;
 function canTestPlay(i) {
     return i.memberPermissions?.has(PermissionFlagsBits.ManageGuild) ?? false;
 }
+/** /setup パネルの BET 金額入力欄。管理者には 0 でテストプレイできることを案内する。 */
+function betAmountInput(i) {
+    const input = new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true);
+    if (canTestPlay(i))
+        input.setPlaceholder('管理者: 0 でテストプレイ (残高は動きません)');
+    return input;
+}
+/** 金額入力が 0 で、かつ管理者ならテストプレイ (仮 BET) に切り替える。 */
+function resolveBet(i, amt) {
+    return amt === 0 && canTestPlay(i) ? { bet: TEST_BET, test: true } : { bet: amt, test: false };
+}
 /** テストプレイでは運営残高による払戻し上限をかけない。 */
 async function capFor(test) {
     return test ? Number.MAX_SAFE_INTEGER : housePayoutCap();
@@ -1021,7 +1032,7 @@ async function onBJButton(i, kind, arg) {
         assertNotBanned(i.user.id);
         if (arg === 'custom') {
             const modal = new ModalBuilder().setCustomId('bj:custombet').setTitle(`${L('BLACKJACK')} — ${L('Custom')} ${L('Bet')}`)
-                .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)));
+                .addComponents(new ActionRowBuilder().addComponents(betAmountInput(i)));
             return i.showModal(modal);
         }
         return startBJ(i, parseInt(arg, 10));
@@ -1275,7 +1286,7 @@ async function onSlotButton(i, kind, arg) {
     assertNotBanned(i.user.id);
     if (arg === 'custom') {
         const modal = new ModalBuilder().setCustomId('slot:custombet').setTitle(`${L('SLOTS')} — ${L('Custom')} ${L('Bet')}`)
-            .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)));
+            .addComponents(new ActionRowBuilder().addComponents(betAmountInput(i)));
         return i.showModal(modal);
     }
     await doSpin(i, parseInt(arg, 10));
@@ -1364,11 +1375,11 @@ async function onRouletteButton(i, kind, arg) {
 async function openRouletteAmountModal(i, kind) {
     if (kind === 'number') {
         const modal = new ModalBuilder().setCustomId('rou:num').setTitle(`${L('ROULETTE')} — Single Number`)
-            .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('num').setLabel('数字 (0〜36)').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)));
+            .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('num').setLabel('数字 (0〜36)').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(betAmountInput(i)));
         return i.showModal(modal);
     }
     const modal = new ModalBuilder().setCustomId(`rou:amt:${kind}`).setTitle(`${L('ROULETTE')} — ${ROU_LABEL[kind] ?? kind}`)
-        .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)));
+        .addComponents(new ActionRowBuilder().addComponents(betAmountInput(i)));
     return i.showModal(modal);
 }
 async function doRouletteSpin(i, kind, bet, number, mix, test = false) {
@@ -1579,7 +1590,7 @@ async function onBaccaratButton(i, kind, arg) {
     assertNotBanned(i.user.id);
     const side = arg;
     const modal = new ModalBuilder().setCustomId(`bac:amt:${side}`).setTitle(`${L('BACCARAT')} — ${side}`)
-        .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)));
+        .addComponents(new ActionRowBuilder().addComponents(betAmountInput(i)));
     return i.showModal(modal);
 }
 async function doBaccarat(i, side, bet, mix, test = false) {
@@ -1630,7 +1641,7 @@ async function onVpButton(i, kind, arg) {
     if (kind === 'deal') {
         if (arg === 'custom') {
             const modal = new ModalBuilder().setCustomId('vp:custombet').setTitle(`${L('VIDEO POKER')} — Custom Bet`)
-                .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('amt').setLabel(`${L('BET')} (${L('chips')})`).setStyle(TextInputStyle.Short).setRequired(true)));
+                .addComponents(new ActionRowBuilder().addComponents(betAmountInput(i)));
             return i.showModal(modal);
         }
         return startVpSession(i, parseInt(arg, 10));
@@ -1978,7 +1989,8 @@ async function onModal(i) {
         const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
         if (amt === null)
             return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-        return startBJ(i, amt);
+        const b = resolveBet(i, amt);
+        return startBJ(i, b.bet, undefined, b.test);
     }
     if (i.customId.startsWith('cr:bet:')) {
         const parts = i.customId.split(':'); // cr:bet:<sid>:<kind>
@@ -1993,33 +2005,38 @@ async function onModal(i) {
         const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
         if (amt === null)
             return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-        return doBaccarat(i, side, amt);
+        const b = resolveBet(i, amt);
+        return doBaccarat(i, side, b.bet, undefined, b.test);
     }
     if (i.customId === 'vp:custombet') {
         const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
         if (amt === null)
             return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-        return startVpSession(i, amt);
+        const b = resolveBet(i, amt);
+        return startVpSession(i, b.bet, undefined, b.test);
     }
     if (i.customId === 'rou:num') {
         const num = parseStrictInt(i.fields.getTextInputValue('num'));
         const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
         if (num === null || amt === null)
             return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-        return doRouletteSpin(i, 'number', amt, num);
+        const b = resolveBet(i, amt);
+        return doRouletteSpin(i, 'number', b.bet, num, undefined, b.test);
     }
     if (i.customId.startsWith('rou:amt:')) {
         const kind = i.customId.split(':')[2];
         const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
         if (amt === null)
             return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-        return doRouletteSpin(i, kind, amt);
+        const b = resolveBet(i, amt);
+        return doRouletteSpin(i, kind, b.bet, undefined, undefined, b.test);
     }
     if (i.customId === 'slot:custombet') {
         const amt = parseStrictInt(i.fields.getTextInputValue('amt'));
         if (amt === null)
             return i.reply({ content: '整数で入力してください', flags: MessageFlags.Ephemeral });
-        return doSpin(i, amt);
+        const b = resolveBet(i, amt);
+        return doSpin(i, b.bet, undefined, b.test);
     }
     if (i.customId === 'dep:ltc') {
         assertNotBanned(i.user.id);
