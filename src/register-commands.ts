@@ -5,11 +5,20 @@ import { REST, Routes, SlashCommandBuilder, PermissionFlagsBits } from 'discord.
 
 const setup = new SlashCommandBuilder()
   .setName('setup')
-  .setDescription('旧版パネルをこのチャンネルに設置 (新規は /blackjack 等のゲーム別コマンド推奨)')
-  .addStringOption(o => o.setName('game')
-    .setDescription('設置するパネル種別。cashier は入出金パネル (ユーザーが入出金を開始する画面)')
+  .setDescription('パネルをこのチャンネルに設置 (管理者)。type でゲーム用か説明用かを選ぶ')
+  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels.toString())
+  .addStringOption(o => o.setName('type')
+    .setDescription('panel = ベット開始用パネル / overview = ルール・配当表の説明パネル (all は overview 専用)')
     .setRequired(true)
     .addChoices(
+      { name: 'ゲームパネル (ベット開始用)',       value: 'panel' },
+      { name: 'ルール説明 (配当表・遊び方)',       value: 'overview' },
+    ))
+  .addStringOption(o => o.setName('game')
+    .setDescription('どの種類を設置するか。all は type=overview の時のみ有効 (全ゲーム概要を1枚に)')
+    .setRequired(true)
+    .addChoices(
+      { name: 'All  (全ゲーム概要を 1 枚, overview 専用)', value: 'all' },
       { name: 'Blackjack',   value: 'blackjack' },
       { name: 'Slots',       value: 'slots' },
       { name: 'Roulette',    value: 'roulette' },
@@ -17,30 +26,12 @@ const setup = new SlashCommandBuilder()
       { name: 'Video Poker', value: 'videopoker' },
       { name: 'Craps',       value: 'craps' },
       { name: 'Cashier (入金・出金)', value: 'cashier' },
-      { name: 'MWS Keep-Alive (7日延長タイマー・通知)', value: 'mws' },
+      { name: 'MWS Keep-Alive (7日延長タイマー・通知, panel 専用)', value: 'mws' },
     ));
 
 const balance = new SlashCommandBuilder()
   .setName('balance')
   .setDescription('自分のチップ残高を表示。PayPay由来/LTC由来の内訳ゲージも出る (ephemeral)');
-
-const overview = new SlashCommandBuilder()
-  .setName('overview')
-  .setDescription('ゲーム概要・ルール・配当表の説明パネルをこのチャンネルに設置する (管理者)')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels.toString())
-  .addStringOption(o => o.setName('game')
-    .setDescription('どのゲームの説明を出すか。all で全ゲーム概要を 1 枚にまとめた総合パネルを設置')
-    .setRequired(true)
-    .addChoices(
-      { name: 'All  (全ゲーム概要を 1 枚)',  value: 'all' },
-      { name: 'Blackjack',             value: 'blackjack' },
-      { name: 'Slots',                 value: 'slots' },
-      { name: 'Roulette',              value: 'roulette' },
-      { name: 'Baccarat',              value: 'baccarat' },
-      { name: 'Video Poker',           value: 'videopoker' },
-      { name: 'Craps',                 value: 'craps' },
-      { name: 'Cashier (入金・出金方法)', value: 'cashier' },
-    ));
 
 const pay = new SlashCommandBuilder()
   .setName('pay')
@@ -224,7 +215,7 @@ const paypay = new SlashCommandBuilder()
     .addStringOption(o => o.setName('passcode').setDescription('リンクパスコード 4 桁数字 (強く推奨)').setRequired(false)));
 
 export const COMMAND_JSON = [
-  setup, balance, overview, pay, withdraw, wallet, admin, bannedWords, paypay, leetCmd,
+  setup, balance, pay, withdraw, wallet, admin, bannedWords, paypay, leetCmd,
   blackjackCmd, slotsCmd, rouletteCmd, baccaratCmd, videopokerCmd, crapsCmd,
 ].map(c => c.toJSON());
 

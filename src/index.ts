@@ -145,7 +145,6 @@ async function onCommand(i: ChatInputCommandInteraction) {
     case 'admin':    return cmdAdmin(i);
     case 'pay':      return cmdPay(i);
     case 'withdraw': return cmdWithdraw(i);
-    case 'overview': return cmdOverview(i);
     case 'banned-words': return cmdBannedWords(i);
     case 'paypay':       return cmdPaypay(i);
     case 'leet':         return cmdLeet(i);
@@ -222,16 +221,6 @@ async function cmdWithdraw(i: ChatInputCommandInteraction) {
   return openLtcWithdrawModal(i);
 }
 
-async function cmdOverview(i: ChatInputCommandInteraction) {
-  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageChannels))
-    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
-  if (!i.channel || !('send' in i.channel))
-    return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
-  const g = i.options.getString('game', true) as GameKey;
-  await i.channel.send({ embeds: [gameOverview(g)] });
-  await i.reply({ content: `✅ ${g} 概要パネルを設置しました`, flags: MessageFlags.Ephemeral });
-}
-
 async function cmdPay(i: ChatInputCommandInteraction) {
   assertNotBanned(i.user.id);
   const method = i.options.getString('method', true) as 'paypay' | 'ltc';
@@ -247,7 +236,19 @@ async function cmdPay(i: ChatInputCommandInteraction) {
 async function cmdSetup(i: ChatInputCommandInteraction) {
   if (!i.memberPermissions?.has(PermissionFlagsBits.ManageChannels))
     return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
+  const type = i.options.getString('type', true) as 'panel' | 'overview';
   const game = i.options.getString('game', true);
+  if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
+
+  if (type === 'overview') {
+    // ルール・配当表の説明パネル。mws には overview が無い。
+    if (game === 'mws') return i.reply({ content: 'MWS には overview が無い。type:panel で設置してね', flags: MessageFlags.Ephemeral });
+    await i.channel.send({ embeds: [gameOverview(game as GameKey)] });
+    return i.reply({ content: `✅ ${game} 概要パネルを設置`, flags: MessageFlags.Ephemeral });
+  }
+
+  // type === 'panel': インタラクティブなベット/操作用パネル。all は overview 専用。
+  if (game === 'all') return i.reply({ content: 'all は overview でのみ使用可能 (type:overview を指定)', flags: MessageFlags.Ephemeral });
   const payload = game === 'blackjack'   ? blackjackPanel()
                : game === 'slots'       ? slotsPanel()
                : game === 'roulette'    ? roulettePanel()
@@ -256,7 +257,6 @@ async function cmdSetup(i: ChatInputCommandInteraction) {
                : game === 'craps'       ? crapsPanel()
                : game === 'mws'         ? mwsPanel(mws.getState())
                : depositPanel();
-  if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
   const msg = await i.channel.send(payload);
   db.prepare('INSERT OR REPLACE INTO panels(guild_id,channel_id,message_id,game) VALUES (?,?,?,?)')
     .run(i.guildId!, i.channelId, msg.id, game);
