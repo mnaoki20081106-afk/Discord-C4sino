@@ -9,7 +9,7 @@ import { dealBaccaratWithCap, payoutMult as bacPayout } from './games/baccarat.j
 import { startVP, drawVPWithCap, payoutFor } from './games/videopoker.js';
 import { newCraps, addBet, roll as crapsRoll, openExposure } from './games/craps.js';
 import { formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker } from './ui/format-games.js';
-import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel, mwsPanel, mwsWarningText } from './ui/panels.js';
+import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, depositMethodPicker, withdrawMethodPicker, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel, mwsPanel, mwsWarningText } from './ui/panels.js';
 import * as mws from './mws/timer.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
@@ -901,7 +901,7 @@ async function onButton(i) {
         return onAdminButton(i, kind);
     if (ns === 'wd' && (kind === 'approve' || kind === 'reject'))
         return onWithdrawAdmin(i, kind, arg);
-    if (ns === 'wd' && (kind === 'paypay' || kind === 'ltc'))
+    if (ns === 'wd' && (kind === 'open' || kind === 'paypay' || kind === 'ltc'))
         return onWithdrawUserButton(i, kind);
     if (ns === 'mws')
         return onMwsButton(i, kind);
@@ -1702,6 +1702,8 @@ async function openLtcWithdrawModal(i) {
 /* ────────────── CASHIER (ユーザー入金) ────────────── */
 async function onDepositButton(i, kind, _arg) {
     assertNotBanned(i.user.id);
+    if (kind === 'open')
+        return i.reply({ ...depositMethodPicker(), flags: MessageFlags.Ephemeral });
     if (kind === 'paypay')
         return openPaypayDepositModal(i);
     if (kind === 'ltc')
@@ -1709,6 +1711,8 @@ async function onDepositButton(i, kind, _arg) {
 }
 async function onWithdrawUserButton(i, kind) {
     assertNotBanned(i.user.id);
+    if (kind === 'open')
+        return i.reply({ ...withdrawMethodPicker(), flags: MessageFlags.Ephemeral });
     if (kind === 'paypay')
         return openPaypayWithdrawModal(i);
     if (kind === 'ltc')

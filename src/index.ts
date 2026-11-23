@@ -15,7 +15,7 @@ import { dealBaccarat, dealBaccaratWithCap, payoutMult as bacPayout, type Side a
 import { startVP, drawVP, drawVPWithCap, payoutFor, type VPHand } from './games/videopoker.js';
 import { newCraps, addBet, roll as crapsRoll, openExposure, type CrapsBetKind, type CrapsState, type CrapsBet } from './games/craps.js';
 import { formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker, formatCraps } from './ui/format-games.js';
-import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel, mwsPanel, mwsWarningText } from './ui/panels.js';
+import { blackjackPanel, slotsPanel, roulettePanel, rouletteBetSelectRow, baccaratPanel, videopokerPanel, vpHoldRow, crapsPanel, crapsControlRows, depositPanel, depositMethodPicker, withdrawMethodPicker, bjActionsRow, balanceReply, bjPlayPanel, slotsPlayPanel, vpPlayPanel, roulettePlayPanel, baccaratPlayPanel, crapsPlayPanel, leetPanel, mwsPanel, mwsWarningText } from './ui/panels.js';
 import * as mws from './mws/timer.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
@@ -955,7 +955,7 @@ async function onButton(i: ButtonInteraction) {
   if (ns === 'dep') return onDepositButton(i, kind, arg);
   if (ns === 'adm') return onAdminButton(i, kind);
   if (ns === 'wd' && (kind === 'approve' || kind === 'reject')) return onWithdrawAdmin(i, kind, arg);
-  if (ns === 'wd' && (kind === 'paypay' || kind === 'ltc')) return onWithdrawUserButton(i, kind);
+  if (ns === 'wd' && (kind === 'open' || kind === 'paypay' || kind === 'ltc')) return onWithdrawUserButton(i, kind);
   if (ns === 'mws') return onMwsButton(i, kind);
   if (ns === 'bal') {
     const r = getReserves(i.user.id);
@@ -1797,12 +1797,14 @@ async function openLtcWithdrawModal(i: ButtonInteraction | StringSelectMenuInter
 
 async function onDepositButton(i: ButtonInteraction, kind: string, _arg: string) {
   assertNotBanned(i.user.id);
+  if (kind === 'open')   return i.reply({ ...depositMethodPicker(), flags: MessageFlags.Ephemeral });
   if (kind === 'paypay') return openPaypayDepositModal(i);
   if (kind === 'ltc')    return showLtcAddress(i);
 }
 
 async function onWithdrawUserButton(i: ButtonInteraction, kind: string) {
   assertNotBanned(i.user.id);
+  if (kind === 'open')   return i.reply({ ...withdrawMethodPicker(), flags: MessageFlags.Ephemeral });
   if (kind === 'paypay') return openPaypayWithdrawModal(i);
   if (kind === 'ltc')    return openLtcWithdrawModal(i);
 }

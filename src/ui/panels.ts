@@ -417,20 +417,33 @@ export function depositPanel() {
     )
     .setFooter({ text: 'Discord C4sino · Cashier' });
 
-  // SelectMenu は「最後に選ばれた値」が全員に残り続ける仕様があるため、
-  // 永続パネルでは Button を使う。
-  const depRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('dep:paypay').setLabel('入金: PayPay').setStyle(ButtonStyle.Success).setEmoji('🅿️'),
-    new ButtonBuilder().setCustomId('dep:ltc').setLabel('入金: LTC').setStyle(ButtonStyle.Success).setEmoji('🪙'),
-  );
-  const wdRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('wd:paypay').setLabel('出金: PayPay').setStyle(ButtonStyle.Primary).setEmoji('🅿️'),
-    new ButtonBuilder().setCustomId('wd:ltc').setLabel('出金: LTC').setStyle(ButtonStyle.Primary).setEmoji('🪙'),
-  );
+  // トップレベルは「入金」「出金」「残高確認」の 3 つのみ。
+  // 入金/出金を押すと ephemeral で支払い方法の選択ボタンが出る (2 段階)。
+  // SelectMenu は永続パネルで「選択済み」状態が残る仕様があるため使わない。
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('dep:open').setLabel('入金').setStyle(ButtonStyle.Success).setEmoji('💵'),
+    new ButtonBuilder().setCustomId('wd:open').setLabel('出金').setStyle(ButtonStyle.Primary).setEmoji('💸'),
     new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary),
   );
-  return { embeds: [embed], components: [depRow, wdRow, row] };
+  return { embeds: [embed], components: [row] };
+}
+
+/** 「入金」ボタンから開く支払い方法選択 (ephemeral)。 */
+export function depositMethodPicker() {
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('dep:paypay').setLabel('PayPay').setStyle(ButtonStyle.Success).setEmoji('🅿️'),
+    new ButtonBuilder().setCustomId('dep:ltc').setLabel('LTC').setStyle(ButtonStyle.Success).setEmoji('🪙'),
+  );
+  return { content: '入金方法を選択してください', components: [row] };
+}
+
+/** 「出金」ボタンから開く支払い方法選択 (ephemeral)。 */
+export function withdrawMethodPicker() {
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId('wd:paypay').setLabel('PayPay').setStyle(ButtonStyle.Primary).setEmoji('🅿️'),
+    new ButtonBuilder().setCustomId('wd:ltc').setLabel('LTC').setStyle(ButtonStyle.Primary).setEmoji('🪙'),
+  );
+  return { content: '出金方法を選択してください', components: [row] };
 }
 
 export function bjActionsRow(actions: string[]): ActionRowBuilder<ButtonBuilder> {
