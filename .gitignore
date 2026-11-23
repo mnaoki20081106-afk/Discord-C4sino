@@ -5,6 +5,7 @@ data/
 *.db-journal
 .DS_Store
 # dist/ はビルド済み成果物を repo に含めて MWS でのビルドを省略するため gitignore しない
-# package-lock.json は MWS の npm install がロックファイルを書き換えてしまい、
-# 次回 git pull でマージ競合を起こすため、トラッキングから外す。
-package-lock.json
+# package-lock.json は 14916fd 時点の内容で固定して追跡している。
+# MWS は自動デプロイで素の git pull を使い、npm install で書き換わった
+# ロックファイルが upstream 側でも変わっていると pull が中断される。
+# このファイルの変更はコミットしないこと。
