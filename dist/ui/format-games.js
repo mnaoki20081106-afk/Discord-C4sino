@@ -58,7 +58,8 @@ export function formatBlackjack(i) {
         const label = i.player.length > 1 ? `**Hand ${idx + 1}** (bet ${i.bets[idx].toLocaleString()})` : `**You** (bet ${i.bets[idx].toLocaleString()})`;
         lines.push(`${marker}${label}`);
         lines.push(big(row(hand)));
-        if (i.results?.[idx]) {
+        // 1 ハンドのときは共通の結果行だけで足りる。スプリット時だけ手ごとの勝敗を出す
+        if (i.results?.[idx] && i.player.length > 1) {
             const res = i.results[idx];
             const resLabel = res === 'bj' ? '✨ BLACKJACK' : res === 'win' ? '✅ WIN' : res === 'push' ? '➖ PUSH' : '❌ LOSE';
             lines.push(`${marker}${resLabel}`);
@@ -79,11 +80,8 @@ export function formatSlots(i) {
     const lines = [];
     lines.push(big(`${slotEmoji(i.reels[0])} ${slotEmoji(i.reels[1])} ${slotEmoji(i.reels[2])}`));
     if (!i.spinning) {
-        if (i.payoutMult > 0) {
-            const win = i.bet * i.payoutMult;
-            const label = i.label ? ` ${i.label}` : '';
-            lines.push(`**+${win.toLocaleString()} chips**  (${i.payoutMult}x)${label}`);
-        }
+        if (i.payoutMult > 0)
+            lines.push(`**${i.payoutMult}x**${i.label ? `  ${i.label}` : ''}`);
     }
     else {
         lines.push('_spinning…_');
@@ -108,21 +106,12 @@ export function formatRoulette(i) {
     else {
         lines.push(`Result  _(${color})_`);
         lines.push(big(num));
-        const win = i.betAmount * i.payoutMult;
-        const net = win - i.betAmount;
-        if (i.payoutMult > 0) {
-            lines.push(`**+${net.toLocaleString()}**  (bet ${i.betLabel} ×${i.payoutMult})`);
-        }
-        else {
-            lines.push(`**-${i.betAmount.toLocaleString()}**  (bet ${i.betLabel})`);
-        }
+        lines.push(`bet: **${i.betLabel}**${i.payoutMult > 0 ? `  ×${i.payoutMult}` : ''}`);
     }
     return lines.join('\n');
 }
 export function formatBaccarat(i) {
-    const net = i.payout - i.bet;
     const winnerLabel = i.winner === 'tie' ? 'TIE' : i.winner === 'player' ? 'PLAYER WINS' : 'BANKER WINS';
-    const msg = net > 0 ? `**+${net.toLocaleString()} chips**` : net < 0 ? `**${net.toLocaleString()} chips**` : '**PUSH**';
     return [
         `**Player** (${i.playerTotal})`,
         big(row(i.player)),
@@ -130,7 +119,7 @@ export function formatBaccarat(i) {
         `**Banker** (${i.bankerTotal})`,
         big(row(i.banker)),
         '',
-        `${winnerLabel}  —  ${msg}  (bet ${i.side} ${i.bet.toLocaleString()})`,
+        `**${winnerLabel}**  (bet: ${i.side})`,
     ].join('\n');
 }
 export function formatVideoPoker(i) {
@@ -142,14 +131,8 @@ export function formatVideoPoker(i) {
     if (i.phase === 'deal') {
         lines.push(heldPos.length ? `HOLD 中: ${heldPos.join(', ')} 枚目  _(DRAW で引き直し)_` : '_HOLD を選んで DRAW_');
     }
-    if (i.phase === 'drawn') {
-        if (i.payoutMult && i.payoutMult > 0) {
-            lines.push(`**${i.rankLabel ?? ''}**  +${(i.bet * i.payoutMult).toLocaleString()} chips  (${i.payoutMult}x)`);
-        }
-        else {
-            lines.push(`**-${i.bet.toLocaleString()}**  (no win)`);
-        }
-    }
+    if (i.phase === 'drawn' && i.payoutMult && i.payoutMult > 0)
+        lines.push(`×${i.payoutMult}`);
     return lines.join('\n');
 }
 function diceEmoji(n) {

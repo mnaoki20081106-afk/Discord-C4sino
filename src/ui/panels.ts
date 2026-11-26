@@ -1,140 +1,15 @@
-import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } from 'discord.js';
+import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import { L } from './leet.js';
 import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY } from '../payments/limits.js';
 import { renderBalance } from './render-balance.js';
 import { formatRemaining, elapsedRatio, EXTENSION_PERIOD_SEC, type MwsState } from '../mws/timer.js';
-import { cardButtonEmoji, cardText } from './format-games.js';
-import type { Card } from '../games/blackjack.js';
+import type { Game } from '../tables.js';
 
-export function blackjackPanel() {
-  const embed = new EmbedBuilder()
-    .setTitle(`🂡  ${L('BLACKJACK')} ${L('TABLE')}  🂱`)
-    .setDescription(`高級テーブルへようこそ。ベット額を選んで着席してください。\n**${L('Pays')} 3:2 — ${L('Dealer')} ${L('hits')} ${L('soft')} 17**`)
-    .setColor(0x0d5a3a)
-    .addFields(
-      { name: `${L('Min')} / ${L('Max')}`, value: `\`10\` / \`50,000\` ${L('chips')}`, inline: true },
-      { name: L('Deck'), value: `\`6 ${L('decks')} ${L('shoe')}\``, inline: true },
-    )
-    .setFooter({ text: `Discord C4sino · ${L('Table')} BJ-01` });
 
-  const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('bj:bet:100').setLabel(`${L('BET')} 100`).setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('bj:bet:500').setLabel(`${L('BET')} 500`).setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('bj:bet:1000').setLabel(`${L('BET')} 1,000`).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('bj:bet:5000').setLabel(`${L('BET')} 5,000`).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('bj:bet:custom').setLabel(L('CUSTOM')).setStyle(ButtonStyle.Success),
-  );
-  return { embeds: [embed], components: [row1] };
-}
 
-export function slotsPanel() {
-  const embed = new EmbedBuilder()
-    .setTitle(`🎰  ${L('C4SINO')} ${L('SLOTS')}  🎰`)
-    .setDescription('3リール・8シンボル。7️⃣ 揃いで **x2300**！')
-    .setColor(0x7f1d1d)
-    .addFields(
-      { name: L('Pays'), value: `🍒🍒🍒 x12 · 🍋🍋🍋 x18 · 🍊🍊🍊 x28 · 🍉🍉🍉 x46\n⭐⭐⭐ x92 · 🔔🔔🔔 x184 · 💎💎💎 x460 · 7️⃣7️⃣7️⃣ **x2300**`, inline: false },
-      { name: L('Side'), value: '🍒🍒? **x2**', inline: true },
-      { name: 'RTP',    value: '≈ 95%', inline: true },
-    )
-    .setFooter({ text: `Discord C4sino · ${L('Slot')} A-01` });
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('slot:spin:50').setLabel(`${L('SPIN')} 50`).setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('slot:spin:100').setLabel(`${L('SPIN')} 100`).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('slot:spin:500').setLabel(`${L('SPIN')} 500`).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('slot:spin:1000').setLabel(`${L('SPIN')} 1,000`).setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId('slot:spin:custom').setLabel(L('CUSTOM')).setStyle(ButtonStyle.Success),
-  );
-  return { embeds: [embed], components: [row] };
-}
 
-export function roulettePanel() {
-  const embed = new EmbedBuilder()
-    .setTitle(`🎡  ${L('EUROPEAN')} ${L('ROULETTE')}  🎡`)
-    .setDescription('シングルゼロ (0 のみ) のヨーロピアン・ルーレット。House edge **2.70%**。')
-    .setColor(0x0d5a3a)
-    .addFields(
-      { name: L('Pays'), value:
-        '🟥 Red / ⬛ Black / Odd / Even / 1–18 Low / 19–36 High ... **×2**\n' +
-        'Dozen 1–12 / 13–24 / 25–36 ... **×3**\n' +
-        'Single Number (0〜36) ... **×36**',
-        inline: false },
-      { name: L('Bet'), value: `10 〜 50,000 ${L('chips')}`, inline: true },
-      { name: 'RTP',   value: '≈ 97.30%', inline: true },
-    )
-    .setFooter({ text: 'Discord C4sino · Roulette Table' });
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('rou:start').setLabel('🎡 PLAY').setStyle(ButtonStyle.Success),
-  );
-  return { embeds: [embed], components: [row] };
-}
 
-/** パネル押下後に出すベット種類の SelectMenu (ephemeral) */
-export function rouletteBetSelectRow() {
-  const sel = new StringSelectMenuBuilder()
-    .setCustomId('rou:select')
-    .setPlaceholder('🔽 ベットタイプを選択…')
-    .addOptions(
-      new StringSelectMenuOptionBuilder().setValue('red').setLabel('🟥 Red (×2)').setDescription('赤の数字 — 18/37'),
-      new StringSelectMenuOptionBuilder().setValue('black').setLabel('⬛ Black (×2)').setDescription('黒の数字 — 18/37'),
-      new StringSelectMenuOptionBuilder().setValue('even').setLabel('Even (×2)').setDescription('偶数 (0 除く) — 18/37'),
-      new StringSelectMenuOptionBuilder().setValue('odd').setLabel('Odd (×2)').setDescription('奇数 — 18/37'),
-      new StringSelectMenuOptionBuilder().setValue('low').setLabel('1–18 Low (×2)').setDescription('下半分 — 18/37'),
-      new StringSelectMenuOptionBuilder().setValue('high').setLabel('19–36 High (×2)').setDescription('上半分 — 18/37'),
-      new StringSelectMenuOptionBuilder().setValue('dozen1').setLabel('Dozen 1–12 (×3)').setDescription('第 1 ダース — 12/37'),
-      new StringSelectMenuOptionBuilder().setValue('dozen2').setLabel('Dozen 13–24 (×3)').setDescription('第 2 ダース — 12/37'),
-      new StringSelectMenuOptionBuilder().setValue('dozen3').setLabel('Dozen 25–36 (×3)').setDescription('第 3 ダース — 12/37'),
-      new StringSelectMenuOptionBuilder().setValue('number').setLabel('🎯 Single Number (×36)').setDescription('単一数字 0〜36 — 1/37'),
-    );
-  return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(sel);
-}
-
-export function baccaratPanel() {
-  const embed = new EmbedBuilder()
-    .setTitle(`🎴  ${L('BACCARAT')}  🎴`)
-    .setDescription('Punto Banco ルール。3 つのベット対象から選んで配牌結果を競う。')
-    .setColor(0x0d5a3a)
-    .addFields(
-      { name: L('Pays'), value:
-        `${L('Player')}: **×2.0**  (House edge 1.24%)\n` +
-        `${L('Banker')}: **×1.95**  (5% コミ・House edge 1.06%)\n` +
-        `${L('Tie')}: **×9.0**  (House edge 14.4%)`,
-        inline: false },
-      { name: L('Bet'), value: `10 〜 50,000 ${L('chips')}`, inline: true },
-    )
-    .setFooter({ text: 'Discord C4sino · Baccarat' });
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('bac:side:player').setLabel('👤 PLAYER ×2').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('bac:side:banker').setLabel('🏦 BANKER ×1.95').setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId('bac:side:tie').setLabel('🤝 TIE ×9').setStyle(ButtonStyle.Success),
-  );
-  return { embeds: [embed], components: [row] };
-}
-
-export function videopokerPanel() {
-  const embed = new EmbedBuilder()
-    .setTitle(`🃏  ${L('VIDEO POKER')} — ${L('JACKS OR BETTER')}  🃏`)
-    .setDescription('5 枚の手札を見て、残したいカードを HOLD、[DRAW] で引き直し。役を作って勝利。')
-    .setColor(0x1e293b)
-    .addFields(
-      { name: L('Pays'), value:
-        '`Royal Flush  ×800` · `Straight Flush  ×50` · `Four of a Kind  ×25`\n' +
-        '`Full House   ×9`  · `Flush          ×6`  · `Straight       ×4`\n' +
-        '`3 of a Kind  ×3`  · `Two Pair       ×2`  · `Jacks or Better ×1`',
-        inline: false },
-      { name: 'RTP', value: '≈ 99.54% (9/6 Jacks, 最適プレイ時)', inline: true },
-    )
-    .setFooter({ text: 'Discord C4sino · Video Poker' });
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('vp:deal:100').setLabel(`DEAL 100`).setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('vp:deal:500').setLabel(`DEAL 500`).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('vp:deal:1000').setLabel(`DEAL 1,000`).setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('vp:deal:5000').setLabel(`DEAL 5,000`).setStyle(ButtonStyle.Danger),
-    new ButtonBuilder().setCustomId('vp:deal:custom').setLabel('CUSTOM').setStyle(ButtonStyle.Success),
-  );
-  return { embeds: [embed], components: [row] };
-}
 
 /**
  * リザルト画面 / 入金完了画面の [Replay] [入金] ボタン。
@@ -155,92 +30,8 @@ export function replayRowFromCtx(ctx: string): ActionRowBuilder<ButtonBuilder> {
   return replayRow(game, rest.join(':') || undefined);
 }
 
-export function vpHoldRow(held: boolean[], cards: Card[]): ActionRowBuilder<ButtonBuilder>[] {
-  const row1 = new ActionRowBuilder<ButtonBuilder>();
-  for (let i = 0; i < 5; i++) {
-    const state = held[i] ? 'HELD' : 'HOLD';
-    const btn = new ButtonBuilder()
-      .setCustomId(`vp:hold:${i}`)
-      .setStyle(held[i] ? ButtonStyle.Success : ButtonStyle.Secondary);
-    const e = cards[i] ? cardButtonEmoji(cards[i]) : null;
-    if (e) btn.setEmoji(e).setLabel(state);
-    else btn.setLabel(cards[i] ? `${cardText(cards[i])} ${state}` : `${i+1} ${state}`);
-    row1.addComponents(btn);
-  }
-  const row2 = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('vp:draw').setLabel('🎴 DRAW').setStyle(ButtonStyle.Primary),
-  );
-  return [row1, row2];
-}
 
-/** Craps 設置用パネル (入口) */
-export function crapsPanel() {
-  const embed = new EmbedBuilder()
-    .setTitle(`🎲  ${L('CRAPS')}  🎲`)
-    .setDescription(
-      '定番のダイスゲーム。Pass / Don\'t Pass から Hardways / Props まで 25 種類のベット。\n' +
-      '「🎲 START」でセッション開始、ephemeral で進行します。'
-    )
-    .setColor(0x0d5a3a)
-    .addFields(
-      { name: 'Pays (抜粋)', value:
-        'Pass / Don\'t Pass / Come / Don\'t Come  **×2**\n' +
-        'Field (3,4,9,10,11)  **×2**  /  (2,12)  **×3**\n' +
-        'Place 4/10 **×2.8**  /  5/9 **×2.4**  /  6/8 **×2.17**\n' +
-        'Hard 4/10 **×8**  /  6/8 **×10**\n' +
-        'Any 7 **×5**  /  Any Craps **×8**  /  Yo **×16**\n' +
-        'Snake Eyes (2) / Boxcars (12)  **×31**',
-        inline: false },
-      { name: 'House edge', value: 'Pass **1.41%** / Don\'t Pass **1.36%** / Pass Odds **0%** / Prop 11–17%', inline: false },
-    )
-    .setFooter({ text: 'Discord C4sino · Craps Table' });
 
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('cr:start').setLabel('🎲 START').setStyle(ButtonStyle.Success),
-  );
-  return { embeds: [embed], components: [row] };
-}
-
-/** Craps 進行中: ベット選択 (SelectMenu) + ROLL / END */
-export function crapsControlRows(state: { phase: 'comeout'|'point'; point?: number; betCount: number }) {
-  const opts = [
-    ['pass',       'Pass Line (×2) — comeout 推奨'],
-    ['dontpass',   "Don't Pass (×2) — 逆張り"],
-    ['pass_odds',  'Pass Odds (×2.2-3) — ポイント必須, no edge'],
-    ['dontpass_odds', "Don't Pass Odds — 要ポイント, no edge"],
-    ['come',       'Come (×2) — ポイント中のみ'],
-    ['dontcome',   "Don't Come — ポイント中のみ"],
-    ['field',      'Field (×2 / ×3) — ワンロール'],
-    ['place4',     'Place 4 (×2.8)'],
-    ['place5',     'Place 5 (×2.4)'],
-    ['place6',     'Place 6 (×2.17)'],
-    ['place8',     'Place 8 (×2.17)'],
-    ['place9',     'Place 9 (×2.4)'],
-    ['place10',    'Place 10 (×2.8)'],
-    ['hard4',      'Hard 4 (×8)'],
-    ['hard6',      'Hard 6 (×10)'],
-    ['hard8',      'Hard 8 (×10)'],
-    ['hard10',     'Hard 10 (×8)'],
-    ['big6',       'Big 6 (×2)'],
-    ['big8',       'Big 8 (×2)'],
-    ['any7',       'Any 7 (×5) — ワンロール'],
-    ['anycraps',   'Any Craps (×8) — ワンロール'],
-    ['yo11',       'Yo 11 (×16) — ワンロール'],
-    ['snakeeyes',  'Snake Eyes 2 (×31) — ワンロール'],
-    ['acedeuce',   'Ace-Deuce 3 (×16) — ワンロール'],
-    ['boxcars',    'Boxcars 12 (×31) — ワンロール'],
-  ] as const;
-  const select = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-    new StringSelectMenuBuilder().setCustomId('cr:add').setPlaceholder('🔽 ベットタイプを選択…')
-      .addOptions(opts.map(([v, l]) => new StringSelectMenuOptionBuilder().setValue(v).setLabel(l.slice(0, 100))))
-  );
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder().setCustomId('cr:roll').setLabel('🎲 ROLL').setStyle(ButtonStyle.Primary).setDisabled(state.betCount === 0),
-    new ButtonBuilder().setCustomId('cr:undo').setLabel('↩ 直前のベット取消').setStyle(ButtonStyle.Secondary).setDisabled(state.betCount === 0),
-    new ButtonBuilder().setCustomId('cr:end').setLabel('END').setStyle(ButtonStyle.Danger),
-  );
-  return [select, row];
-}
 
 export function leetPanel() {
   const embed = new EmbedBuilder()
@@ -259,7 +50,7 @@ export function leetPanel() {
 
 /* ────────────── Per-game Play panels (mix bet 対応) ────────────── */
 
-export function bjPlayPanel() {
+function bjPlayPanel() {
   const embed = new EmbedBuilder()
     .setTitle(L('BLACKJACK'))
     .setColor(0x0d5a3a)
@@ -285,7 +76,7 @@ export function bjPlayPanel() {
   return { embeds: [embed], components: [row] };
 }
 
-export function slotsPlayPanel() {
+function slotsPlayPanel() {
   const embed = new EmbedBuilder()
     .setTitle(L('SLOTS'))
     .setColor(0x7c2d12)
@@ -297,7 +88,7 @@ export function slotsPlayPanel() {
         '・3-of-a-kind: シンボル固有倍率 (5x〜200x)\n' +
         '・2 連 🍒: 2x サイド配当',
         inline: false },
-      { name: '最小 / 最大 BET', value: '`10` / `25,000` chips', inline: true },
+      { name: '最小 / 最大 BET', value: '`10` / `10,000` chips', inline: true },
       { name: 'RTP (目安)', value: '94〜96%', inline: true },
     )
     .setFooter({ text: 'Play を押して BET 額を入力' });
@@ -308,7 +99,7 @@ export function slotsPlayPanel() {
   return { embeds: [embed], components: [row] };
 }
 
-export function vpPlayPanel() {
+function vpPlayPanel() {
   const embed = new EmbedBuilder()
     .setTitle(L('VIDEO POKER'))
     .setColor(0x1e3a8a)
@@ -321,7 +112,7 @@ export function vpPlayPanel() {
         'Full House 9 / Flush 6 / Straight 4 / 3-of-a-kind 3\n' +
         'Two Pair 2 / Jacks or Better 1',
         inline: false },
-      { name: '最小 / 最大 BET', value: '`10` / `10,000` chips', inline: true },
+      { name: '最小 / 最大 BET', value: '`10` / `50,000` chips', inline: true },
       { name: 'RTP (完璧プレイ)', value: '約 99.5%', inline: true },
     )
     .setFooter({ text: 'Play を押して BET 額を入力' });
@@ -332,12 +123,12 @@ export function vpPlayPanel() {
   return { embeds: [embed], components: [row] };
 }
 
-export function roulettePlayPanel() {
+function roulettePlayPanel() {
   const embed = new EmbedBuilder()
     .setTitle(L('ROULETTE'))
     .setColor(0x991b1b)
     .setDescription(
-      'シングルゼロ (ヨーロピアン)。賭け方を選んで BET 額を入力してください。'
+      'シングルゼロ (ヨーロピアン)。テーブルで掛け方を選んで BET。'
     )
     .addFields(
       { name: '配当', value:
@@ -345,7 +136,7 @@ export function roulettePlayPanel() {
         '・Red / Black / Odd / Even / Low / High **1:1**\n' +
         '・Dozen / Column **2:1**',
         inline: false },
-      { name: '最小 / 最大 BET', value: '`10` / `20,000` chips', inline: true },
+      { name: '最小 / 最大 BET', value: '`10` / `50,000` chips', inline: true },
       { name: 'ハウスエッジ', value: '2.70% (0 の一枠)', inline: true },
     )
     .setFooter({ text: '賭け方を押して BET 額を入力' });
@@ -364,7 +155,7 @@ export function roulettePlayPanel() {
   return { embeds: [embed], components: [row1, row2] };
 }
 
-export function baccaratPlayPanel() {
+function baccaratPlayPanel() {
   const embed = new EmbedBuilder()
     .setTitle(L('BACCARAT'))
     .setColor(0x065f46)
@@ -377,7 +168,7 @@ export function baccaratPlayPanel() {
         '・Banker 勝ち **1:0.95** (5% コミッション)\n' +
         '・Tie **8:1**',
         inline: false },
-      { name: '最小 / 最大 BET', value: '`10` / `30,000` chips', inline: true },
+      { name: '最小 / 最大 BET', value: '`10` / `50,000` chips', inline: true },
       { name: 'ハウスエッジ', value: 'Banker 1.06% / Player 1.24% / Tie 14.4%', inline: true },
     )
     .setFooter({ text: '賭け先を押して BET 額を入力' });
@@ -390,17 +181,34 @@ export function baccaratPlayPanel() {
   return { embeds: [embed], components: [row] };
 }
 
-export function crapsPlayPanel() {
+function crapsPlayPanel() {
   const embed = new EmbedBuilder()
     .setTitle(L('CRAPS'))
     .setColor(0xb45309)
     .setDescription(
       '2 ダイスで Point / Come-out を解決。複数 BET をテーブルに置いて同時解決します。\n' +
-      'BET ごとに PayPay 由来 / LTC 由来の金額を指定します。'
+      '賭けの種類を選ぶと、今の BET 額で台に置きます。'
     );
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
     new ButtonBuilder().setCustomId('cr:start').setLabel('PLAY').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId('bal').setLabel('残高確認').setStyle(ButtonStyle.Secondary),
+  );
+  return { embeds: [embed], components: [row] };
+}
+
+const GAME_INFO: Record<Game, () => { embeds: EmbedBuilder[] }> = {
+  blackjack: bjPlayPanel, slots: slotsPlayPanel, videopoker: vpPlayPanel,
+  roulette: roulettePlayPanel, baccarat: baccaratPlayPanel, craps: crapsPlayPanel,
+};
+
+/** チャンネルに置くゲームのパネル。全ゲーム共通で [PLAY] [入金] [残高]。 */
+export function publicGamePanel(game: Game) {
+  const embed = EmbedBuilder.from(GAME_INFO[game]().embeds[0])
+    .setFooter({ text: 'PLAY で自分専用のテーブルが開きます。BET 額は次回も引き継がれます' });
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder().setCustomId(`play:${game}`).setLabel('PLAY').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`dep:open:${game}`).setLabel('入金').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId('bal').setLabel('残高').setStyle(ButtonStyle.Secondary),
   );
   return { embeds: [embed], components: [row] };
 }
