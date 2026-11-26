@@ -895,25 +895,27 @@ function minesGrid(st: MinesState): string {
   return lines.join('\n');
 }
 
-/** 次の 1 マスを開けてよいか (払戻しが運営の払える額を超えないか) */
-async function minesCanOpenNext(sid: string, st: MinesState, bet: number, test: boolean): Promise<boolean> {
-  const k = openedCount(st);
-  if (k >= safeCount(st)) return false;
-  if (test) return true;
-  return minesPayout(bet, st.size, st.mines, k + 1) <= await housePayoutCap(sid);
-}
+/** 宝石を全部開けたときの払戻し (このゲームで払う可能性がある最大額) */
+const minesMaxPayout = (st: MinesState, bet: number) => minesPayout(bet, st.size, st.mines, safeCount(st));
 
 async function playMines(i: TI, r: Round) {
   const { size, mines } = minesOpt(r.p.opt);
   const st = newMines(size, mines);
   const entry = sessions.create(r.uid, 'mines', st, r.bet, r.mix, r.test);
-  // 1 マス目の払戻しすら運営が払えないなら、始めずに返金する
-  if (!(await minesCanOpenNext(entry.id, st, r.bet, r.test))) {
-    sessions.drop(entry.id);
-    if (!r.test) credit(r.uid, r.bet, r.mix, 'refund:mines:cap');
-    return refresh(i, 'mines', '運営が払える額を超えるため、この BET 額と爆弾の数では遊べません。BET 額を下げるか爆弾を減らしてください (BET は返金しました)');
+  if (!r.test) {
+    // 上限は BET の時点で判断する。最大額が運営の払える額に収まらなければ始めずに返金し、
+    // 収まればその額を最後まで確保しておく (ゲームの途中で止まることはない)
+    const cap = await housePayoutCap(entry.id);
+    if (minesMaxPayout(st, r.bet) > cap) {
+      sessions.drop(entry.id);
+      credit(r.uid, r.bet, r.mix, 'refund:mines:cap');
+      const maxBet = Math.floor(cap / minesMult(size, mines, safeCount(st)));
+      return refresh(i, 'mines', maxBet >= BET_LIMITS.mines.min
+        ? `${size}×${size}・爆弾 ${mines} 個の BET は ¥${maxBet.toLocaleString()} までです。BET 額を変えるか、爆弾の数を減らしてください`
+        : `今は ${size}×${size}・爆弾 ${mines} 個では遊べません。爆弾の数を減らしてください`);
+    }
+    setCrapsExposure(entry.id, minesMaxPayout(st, r.bet));
   }
-  if (!r.test) setCrapsExposure(entry.id, 0);
   await renderMines(i, entry.id);
 }
 
@@ -936,11 +938,7 @@ export async function onMinesAction(i: ButtonInteraction, action: 'open' | 'cash
     if (action === 'open') {
       const cell = Number(arg);
       if (!Number.isInteger(cell)) return renderMines(i, sid!);
-      if (!(await minesCanOpenNext(sid!, st, entry.bet, test))) {
-        return renderMines(i, sid!, '次のマスの払戻しが運営の払える額を超えるため、これ以上開けられません。CASH OUT してください');
-      }
       const res = openCell(st, cell);
-      if (res === 'safe' && !test) setCrapsExposure(sid!, minesPayout(entry.bet, st.size, st.mines, openedCount(st)));
       if (res === 'safe' && openedCount(st) >= safeCount(st)) st.phase = 'cashed';   // 宝石を全部開けたら自動で CASH OUT
       return renderMines(i, sid!);
     }
@@ -978,7 +976,6 @@ async function renderMines(i: TI, sid: string, notice?: string) {
   }
 
   sessions.save(sid);
-  const canOpen = await minesCanOpenNext(sid, st, entry.bet, test);
   const now = minesMult(st.size, st.mines, k);
   const next = k < safeCount(st) ? minesMult(st.size, st.mines, k + 1) : null;
   const lines = [
@@ -993,7 +990,7 @@ async function renderMines(i: TI, sid: string, notice?: string) {
     for (let c = 0; c < st.size; c++) {
       const cell = r * st.size + c;
       const opened = st.opened[cell];
-      const b = new ButtonBuilder().setCustomId(`mn:open:${cell}:${sid}`).setStyle(ButtonStyle.Secondary).setDisabled(opened || !canOpen);
+      const b = new ButtonBuilder().setCustomId(`mn:open:${cell}:${sid}`).setStyle(ButtonStyle.Secondary).setDisabled(opened);
       const ref = emojiRef(opened ? 'mines_gem' : 'mines_tile');
       if (ref) b.setEmoji(ref); else b.setLabel(opened ? '◆' : '?');
       row.addComponents(b);
@@ -1004,7 +1001,7 @@ async function renderMines(i: TI, sid: string, notice?: string) {
   await show(i, {
     game: 'mines', uid, prefs: p, test, sid, inRound: true, bare: true,
     board: lines.join('\n'),
-    notice: notice ?? (canOpen ? undefined : (k < safeCount(st) ? '次のマスの払戻しが運営の払える額を超えるため、これ以上開けられません。CASH OUT してください' : undefined)),
+    notice,
     actions: grid,
     primary: new ActionRowBuilder<ButtonBuilder>().addComponents(
       withEmoji(new ButtonBuilder().setCustomId(`mn:cash:${sid}`).setLabel(cashLabel).setStyle(ButtonStyle.Primary).setDisabled(k === 0), 'ui_chip')),
