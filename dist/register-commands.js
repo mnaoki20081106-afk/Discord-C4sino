@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { REST, Routes, SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 // Discord の制約: description は 1〜100 文字。各行はこの上限ギリギリまで詳しく書く。
-// コマンドは運営用の /admin panel だけ。ユーザーの操作は全部パネルのボタンで行う。
+// コマンドは運営用の /admin panel・/mws・/leet だけ。ユーザーの操作は全部パネルのボタンで行う。
 // 管理パネルは 3 種類を、それぞれ専用のチャンネルに置いて使う。
 const admin = new SlashCommandBuilder()
     .setName('admin')
@@ -13,8 +13,20 @@ const admin = new SlashCommandBuilder()
     .setDescription('設置する管理パネル')
     .setRequired(true)
     .addChoices({ name: 'ゲーム管理パネル (パネルの設置・再設置)', value: 'games' }, { name: 'ウォレット管理パネル (運営の PayPay・LTC)', value: 'wallet' }, { name: 'サーバー管理パネル (NG ワード・ユーザー・運営データ)', value: 'server' })));
+// MWS で延長したら実行し、7 日タイマーをリセットする。
+const mws = new SlashCommandBuilder()
+    .setName('mws')
+    .setDescription('MWS で延長したら実行。7 日タイマーをリセットする (管理者)')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString());
+// どのチャンネルでも実行でき、入力画面を開く。結果は本人だけに見える。
+const leet = new SlashCommandBuilder()
+    .setName('leet')
+    .setDescription('文字列を LEET 表記に変換する。結果はコピーできる形で本人だけに表示 (管理者)')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild.toString());
 export const COMMAND_JSON = [
     admin,
+    mws,
+    leet,
 ].map(c => c.toJSON());
 /** 任意の token/clientId/guildId を使ってスラッシュコマンドを Discord に PUT する。
  *  スクリプト (npm run register) と、index.ts からの起動時自動登録の両方から呼ぶ。 */

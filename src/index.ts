@@ -9,6 +9,7 @@ import {
 import {
   adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal,
   panelLabel, isAdminPanelKey, type InstalledPanel, type WalletRow, type UserSummary, type Notice,
+  mwsResetScreen, mwsWarningEmbed,
 } from './ui/admin-panel.js';
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
 import * as sessions from './games/session-store.js';
@@ -16,7 +17,7 @@ import {
   openTable, replayInPlace, onTableButton, onTableSelect, onTableModal,
   onBlackjackAction, onVideoPokerAction, onCrapsAction, isGame, setTablesClient,
 } from './tables.js';
-import { depositPanel, depositMethodPicker, withdrawMethodPicker, balanceReply, leetPanel, mwsPanel, mwsWarningText, replayRowFromCtx, publicGamePanel } from './ui/panels.js';
+import { depositPanel, depositMethodPicker, withdrawMethodPicker, balanceReply, leetPanel, mwsPanel, replayRowFromCtx, publicGamePanel } from './ui/panels.js';
 import * as mws from './mws/timer.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
@@ -102,12 +103,13 @@ function startMwsTicker() {
   const run = async () => {
     try {
       const result = mws.evaluateTick();
-      if (!result || !result.state.notifyChannelId) return;
-      const ch = await client.channels.fetch(result.state.notifyChannelId).catch(() => null);
-      if (!ch || !('send' in ch)) return;
-      const roleMention = result.state.notifyRoleId ? `<@&${result.state.notifyRoleId}>` : null;
-      const text = mwsWarningText(result.bucket as 24|6|1|'expired', result.state, roleMention);
-      await (ch as any).send({ content: text, allowedMentions: { roles: result.state.notifyRoleId ? [result.state.notifyRoleId] : [] } }).catch(() => {});
+      if (!result) return;
+      // 通知はサーバー管理パネルを設置したチャンネルに送る
+      const embed = mwsWarningEmbed(result.bucket as 24 | 6 | 1 | 'expired', result.state.expiresAt);
+      for (const channelId of serverPanelChannels()) {
+        const ch = await client.channels.fetch(channelId).catch(() => null);
+        if (ch && 'send' in ch) await (ch as any).send({ embeds: [embed] }).catch(() => {});
+      }
     } catch (e) {
       console.error('[mws] tick failed:', (e as Error).message);
     }
@@ -115,6 +117,12 @@ function startMwsTicker() {
   // 起動直後に 1 回、その後 10 分おき
   run();
   setInterval(run, 10 * 60 * 1000);
+}
+
+/** サーバー管理パネルを設置しているチャンネル (MWS の期限通知の送り先) */
+function serverPanelChannels(): string[] {
+  return (db.prepare(`SELECT DISTINCT channel_id FROM panels WHERE game='admin:server'`).all() as { channel_id: string }[])
+    .map(r => r.channel_id);
 }
 
 client.on(Events.GuildCreate, async g => {
@@ -143,6 +151,11 @@ client.on(Events.InteractionCreate, async (i) => {
 
 async function onCommand(i: ChatInputCommandInteraction) {
   if (i.commandName === 'admin') return cmdAdmin(i);
+  if (i.commandName === 'mws') {
+    const state = mws.markExtended();
+    return i.reply({ ...mwsResetScreen(state.expiresAt, serverPanelChannels()), flags: MessageFlags.Ephemeral });
+  }
+  if (i.commandName === 'leet') return i.showModal(leetModal());
 }
 
 /* ────────────── PayPay 直接操作 (ウォレット管理パネルから呼ぶ) ────────────── */
@@ -1372,14 +1385,18 @@ async function processPaypayDeposit(discordId: string, linkInput: string, passco
 async function onLeetButton(i: ButtonInteraction) {
   if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
     return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
-  const modal = new ModalBuilder().setCustomId('leet:input').setTitle('LEET 変換')
+  return i.showModal(leetModal());
+}
+
+/** LEET 変換の入力画面 (/leet と、以前設置した LEET パネルのボタンで使う) */
+function leetModal() {
+  return new ModalBuilder().setCustomId('leet:input').setTitle('LEET 変換')
     .addComponents(new ActionRowBuilder<TextInputBuilder>().addComponents(
       new TextInputBuilder().setCustomId('text')
         .setLabel('変換する文字列 (アルファベットが対象)')
         .setStyle(TextInputStyle.Paragraph)
         .setMaxLength(1800)
         .setRequired(true)));
-  return i.showModal(modal);
 }
 
 async function onModal(i: ModalSubmitInteraction) {

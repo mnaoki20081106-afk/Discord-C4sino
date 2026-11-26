@@ -27,8 +27,11 @@ export const PANEL_KINDS = [
     { key: 'overview:videopoker', label: 'ルール: ビデオポーカー', emoji: 'game_videopoker', group: 'ルール説明' },
     { key: 'overview:craps', label: 'ルール: クラップス', emoji: 'game_craps', group: 'ルール説明' },
     { key: 'overview:cashier', label: 'ルール: 入出金', emoji: 'ui_wallet', group: 'ルール説明' },
-    { key: 'mws', label: 'MWS 延長タイマー', emoji: 'adm_server', group: '運営' },
-    { key: 'leet', label: 'LEET 変換', emoji: 'adm_leet', group: '運営' },
+];
+/** 以前は設置できたパネル。今は /mws・/leet コマンドで使う。設置済みのものは一覧と再設置で扱う。 */
+const LEGACY_KINDS = [
+    { key: 'mws', label: 'MWS 延長タイマー (旧)', emoji: 'adm_server' },
+    { key: 'leet', label: 'LEET 変換 (旧)', emoji: 'adm_leet' },
 ];
 /** 管理パネル。ゲーム管理パネルの対象外で、/admin panel でだけ設置する。 */
 export const ADMIN_PANEL_KINDS = [
@@ -37,7 +40,7 @@ export const ADMIN_PANEL_KINDS = [
     { key: 'admin:server', label: 'サーバー管理パネル' },
 ];
 export const isAdminPanelKey = (key) => key === 'admin' || key.startsWith('admin:');
-export const panelLabel = (key) => [...PANEL_KINDS, ...ADMIN_PANEL_KINDS].find(k => k.key === key)?.label ?? key;
+export const panelLabel = (key) => [...PANEL_KINDS, ...LEGACY_KINDS, ...ADMIN_PANEL_KINDS].find(k => k.key === key)?.label ?? key;
 /** 管理パネル専用の絵文字。ユーザー向けの画面と混同しないよう、別の絵柄を使う。 */
 const ADM = {
     badge: () => emoji('adm_badge') || '◆',
@@ -53,7 +56,7 @@ const ADM = {
     bullet: () => emoji('adm_bullet') || '◇',
 };
 /** 設置済み一覧で各パネルの前に出す絵文字 (箇条書きの矢印とは別のもの) */
-const panelIcon = (key) => emoji(PANEL_KINDS.find(x => x.key === key)?.emoji ?? '') || '•';
+const panelIcon = (key) => emoji([...PANEL_KINDS, ...LEGACY_KINDS].find(x => x.key === key)?.emoji ?? '') || '•';
 /* ────────────── 部品 ────────────── */
 function btn(id, label, style = ButtonStyle.Secondary, emojiName, disabled = false) {
     const b = new ButtonBuilder().setCustomId(id).setLabel(label).setStyle(style).setDisabled(disabled);
@@ -188,10 +191,11 @@ export function serverHome(notice) {
         { icon: ADM.ng(), title: 'NG ワード管理', lines: ['一覧・追加・削除'] },
         { icon: ADM.user(), title: 'ユーザー管理', lines: ['ユーザーを選んで、情報・履歴・chip 付与・手動送金・BAN'] },
         { icon: ADM.chart(), title: '運営データ', lines: ['統計・出金の保留・最近の入金・当選告知の設定'] },
+        { icon: ADM.bullet(), title: 'コマンド', lines: ['`/mws` MWS で延長したら実行。7 日タイマーをリセット', '`/leet` 文字列を LEET 表記に変換', 'MWS の期限が近づくと、このチャンネルに通知が届く'] },
     ], notice, ADM.server());
     return {
         embeds: [embed],
-        components: [row(btn('ap:open:ng', 'NG ワード管理', ButtonStyle.Secondary, 'adm_ng'), btn('ap:open:user', 'ユーザー管理', ButtonStyle.Secondary, 'adm_user'), btn('ap:open:ops', '運営データ', ButtonStyle.Secondary, 'adm_chart'), btn('ap:open:leet', 'LEET', ButtonStyle.Secondary, 'adm_leet'))],
+        components: [row(btn('ap:open:ng', 'NG ワード管理', ButtonStyle.Secondary, 'adm_ng'), btn('ap:open:user', 'ユーザー管理', ButtonStyle.Secondary, 'adm_user'), btn('ap:open:ops', '運営データ', ButtonStyle.Secondary, 'adm_chart'))],
     };
 }
 export function ngScreen(words, notice) {
@@ -275,4 +279,26 @@ const input = (id, label, opts = {}) => {
 };
 export function adminModal(id, title, fields) {
     return new ModalBuilder().setCustomId(id).setTitle(title.slice(0, 45)).addComponents(...fields.map(f => input(...f)));
+}
+/* ────────────── MWS 7 日タイマー (/mws と期限前の通知) ────────────── */
+/** /mws を実行した人だけに見える結果 */
+export function mwsResetScreen(expiresAt, notifyChannels) {
+    return { embeds: [screen('MWS タイマー', 'MWS で延長したら /mws を実行', [
+                { icon: ADM.check(), title: 'リセットしました', lines: [`次の期限: <t:${expiresAt}:f> (<t:${expiresAt}:R>)`] },
+                { icon: ADM.server(), title: '通知先', lines: notifyChannels.length
+                        ? [...notifyChannels.map(id => `<#${id}>`), '残り 24 時間・6 時間・1 時間と、期限切れの時に届く']
+                        : ['サーバー管理パネルが設置されていないので、通知は届きません', '/admin panel でサーバー管理パネルを設置してください'] },
+            ], undefined, ADM.server())] };
+}
+/** 期限が近づいた時にサーバー管理パネルのチャンネルへ送る通知 */
+export function mwsWarningEmbed(bucket, expiresAt) {
+    const expired = bucket === 'expired';
+    const title = expired ? 'MWS の期限が切れました' : `MWS の期限まで残り ${bucket} 時間`;
+    const lines = expired
+        ? ['MWS のダッシュボードですぐに延長し、そのあと `/mws` を実行']
+        : [`期限: <t:${expiresAt}:f> (<t:${expiresAt}:R>)`, 'MWS のダッシュボードで延長し、そのあと `/mws` を実行'];
+    return panelEmbed({
+        icon: ADM.server(), title, tagline: 'MWS 7 日タイマー', sections: [{ icon: ADM.badge(), title: 'やること', lines }],
+        color: expired || bucket === 1 ? COLOR.black : COLOR.violet, footer: 'C4sino · 管理通知', bullet: ADM.bullet(), deco: '',
+    });
 }

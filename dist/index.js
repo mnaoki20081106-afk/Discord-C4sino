@@ -1,10 +1,10 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, Partials, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, Events, PermissionFlagsBits, EmbedBuilder, ButtonBuilder, ButtonStyle, MessageFlags, } from 'discord.js';
-import { adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal, panelLabel, isAdminPanelKey, } from './ui/admin-panel.js';
+import { adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal, panelLabel, isAdminPanelKey, mwsResetScreen, mwsWarningEmbed, } from './ui/admin-panel.js';
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
 import * as sessions from './games/session-store.js';
 import { openTable, replayInPlace, onTableButton, onTableSelect, onTableModal, onBlackjackAction, onVideoPokerAction, onCrapsAction, isGame, setTablesClient, } from './tables.js';
-import { depositPanel, depositMethodPicker, withdrawMethodPicker, balanceReply, leetPanel, mwsPanel, mwsWarningText, replayRowFromCtx, publicGamePanel } from './ui/panels.js';
+import { depositPanel, depositMethodPicker, withdrawMethodPicker, balanceReply, leetPanel, mwsPanel, replayRowFromCtx, publicGamePanel } from './ui/panels.js';
 import * as mws from './mws/timer.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
@@ -89,14 +89,15 @@ function startMwsTicker() {
     const run = async () => {
         try {
             const result = mws.evaluateTick();
-            if (!result || !result.state.notifyChannelId)
+            if (!result)
                 return;
-            const ch = await client.channels.fetch(result.state.notifyChannelId).catch(() => null);
-            if (!ch || !('send' in ch))
-                return;
-            const roleMention = result.state.notifyRoleId ? `<@&${result.state.notifyRoleId}>` : null;
-            const text = mwsWarningText(result.bucket, result.state, roleMention);
-            await ch.send({ content: text, allowedMentions: { roles: result.state.notifyRoleId ? [result.state.notifyRoleId] : [] } }).catch(() => { });
+            // 通知はサーバー管理パネルを設置したチャンネルに送る
+            const embed = mwsWarningEmbed(result.bucket, result.state.expiresAt);
+            for (const channelId of serverPanelChannels()) {
+                const ch = await client.channels.fetch(channelId).catch(() => null);
+                if (ch && 'send' in ch)
+                    await ch.send({ embeds: [embed] }).catch(() => { });
+            }
         }
         catch (e) {
             console.error('[mws] tick failed:', e.message);
@@ -105,6 +106,11 @@ function startMwsTicker() {
     // 起動直後に 1 回、その後 10 分おき
     run();
     setInterval(run, 10 * 60 * 1000);
+}
+/** サーバー管理パネルを設置しているチャンネル (MWS の期限通知の送り先) */
+function serverPanelChannels() {
+    return db.prepare(`SELECT DISTINCT channel_id FROM panels WHERE game='admin:server'`).all()
+        .map(r => r.channel_id);
 }
 client.on(Events.GuildCreate, async (g) => {
     // 旧ルールが入っていたら削除
@@ -141,6 +147,12 @@ client.on(Events.InteractionCreate, async (i) => {
 async function onCommand(i) {
     if (i.commandName === 'admin')
         return cmdAdmin(i);
+    if (i.commandName === 'mws') {
+        const state = mws.markExtended();
+        return i.reply({ ...mwsResetScreen(state.expiresAt, serverPanelChannels()), flags: MessageFlags.Ephemeral });
+    }
+    if (i.commandName === 'leet')
+        return i.showModal(leetModal());
 }
 /* ────────────── PayPay 直接操作 (ウォレット管理パネルから呼ぶ) ────────────── */
 async function cmdPaypay(i) {
@@ -1334,13 +1346,16 @@ async function processPaypayDeposit(discordId, linkInput, passcode) {
 async function onLeetButton(i) {
     if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
         return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
-    const modal = new ModalBuilder().setCustomId('leet:input').setTitle('LEET 変換')
+    return i.showModal(leetModal());
+}
+/** LEET 変換の入力画面 (/leet と、以前設置した LEET パネルのボタンで使う) */
+function leetModal() {
+    return new ModalBuilder().setCustomId('leet:input').setTitle('LEET 変換')
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('text')
         .setLabel('変換する文字列 (アルファベットが対象)')
         .setStyle(TextInputStyle.Paragraph)
         .setMaxLength(1800)
         .setRequired(true)));
-    return i.showModal(modal);
 }
 async function onModal(i) {
     if (i.customId === 'leet:input') {
