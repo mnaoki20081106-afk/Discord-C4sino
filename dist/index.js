@@ -1306,6 +1306,20 @@ async function openPaypayDepositModal(i, ctx = '') {
         .addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('url').setLabel('送金リンク').setPlaceholder('https://pay.paypay.ne.jp/...').setStyle(TextInputStyle.Short).setRequired(true)), new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('pin').setLabel('パスコード (設定していれば)').setStyle(TextInputStyle.Short).setRequired(false)));
     await i.showModal(modal);
 }
+/** タップでコピーできる形 (インラインコード) にする。行ごとに囲み、2000 文字に収める。 */
+function tapToCopy(text) {
+    const out = [];
+    let len = 0;
+    for (const line of text.split('\n')) {
+        // 中に ` があると囲みが閉じてしまうので、`` で囲む (前後の空白は表示されない)
+        const piece = line.trim() === '' ? '' : line.includes('`') ? `\`\` ${line.replace(/``+/g, m => m.split('').join('\u200b'))} \`\`` : `\`${line}\``;
+        if (len + piece.length + 1 > 2000)
+            break;
+        out.push(piece);
+        len += piece.length + 1;
+    }
+    return out.join('\n') || '`(空)`';
+}
 /** LTC 選択時: 直接モーダルを開いて JPY を入力させる (空欄なら見積なしでアドレスだけ返す) */
 async function showLtcAddress(i, ctx = '') {
     if (!hasLtcWallet())
@@ -1344,7 +1358,7 @@ async function replyLtcQuote(i, jpy, ctx = '') {
     }
     const ltc = ltcMatch.satToLtc(req.amount_sat);
     const uri = `litecoin:${address}?amount=${ltc}`;
-    const block = (t) => '```\n' + t + '\n```';
+    const block = (t) => '`' + t + '`'; // タップでコピーできる形
     const embed = panelEmbed({
         icon: ICON.ltc(), title: 'LTC 入金', tagline: '下の量をぴったり送ってください', color: COLOR.violet, deco: '',
         sections: [{ icon: ICON.crown(), title: '注意', lines: [
@@ -1363,7 +1377,7 @@ async function replyLtcQuote(i, jpy, ctx = '') {
         `### ${ICON.wallet()} 送金先\n${block(address)}`,
         `### ${ICON.ltc()} 送る量 (¥${jpy.toLocaleString()} 分)\n${block(ltc)}`,
         ...rest,
-        `-# 送金アプリ用のリンク\n${block(uri)}`,
+        `送金アプリ用のリンク\n${block(uri)}`,
     ].join('\n\n'));
     return i.editReply({ content: '', embeds: [embed], components: rows });
 }
@@ -1422,10 +1436,9 @@ async function onModal(i) {
         if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
             return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
         const src = i.fields.getTextInputValue('text');
-        // 中身だけのコードブロックにする。``` が混ざるとブロックが閉じるので崩し、
-        // 2000 文字に収まるよう本文側を切って閉じ記号は必ず残す。
-        const converted = L(src).replace(/```/g, '`​``').slice(0, 2000 - 8);
-        return i.reply({ content: `\`\`\`\n${converted}\n\`\`\``, flags: MessageFlags.Ephemeral });
+        // スマホの Discord は ` 1 つで囲んだ部分 (インラインコード) をタップでコピーできる。
+        // ``` のコードブロックはタップしてもコピーされないので使わない。改行をまたげないため 1 行ずつ囲む。
+        return i.reply({ content: tapToCopy(L(src)), flags: MessageFlags.Ephemeral });
     }
     if (i.customId.startsWith('t:'))
         return onTableModal(i);
