@@ -9,7 +9,7 @@ import {
 import {
   adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal,
   panelLabel, isAdminPanelKey, isLegacyPanelKey, type InstalledPanel, type WalletRow, type UserSummary, type Notice,
-  mwsResetScreen, mwsWarningEmbed, ltcUnmatchedEmbed, salesScreen, type SalesSummary,
+  mwsResetScreen, mwsWarningEmbed, ltcUnmatchedEmbed, salesScreen, type SalesSummary, type SalesPeriod,
 } from './ui/admin-panel.js';
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
 import * as sessions from './games/session-store.js';
@@ -1039,22 +1039,27 @@ async function renderAdmin(i: AdminI, screenName: string, notice?: Notice) {
   }
 }
 
-/** 売上: 確定した入金と、送り終えた出金の合計 (円) */
+/** 売上: 確定した入金と、送り終えた出金の合計 (円)。月は日本時間で区切る。 */
 function salesSummary(): SalesSummary {
-  const now = Math.floor(Date.now() / 1000);
-  const sum = (sql: string, ...args: unknown[]) => (db.prepare(sql).get(...args) as { s: number }).s;
-  const period = (since: number) => {
-    const dep = (m: string) => sum(`SELECT COALESCE(SUM(amount_jpy),0) s FROM deposits WHERE status='confirmed' AND method=? AND COALESCE(confirmed_at, created_at) >= ?`, m, since);
-    const wd  = (m: string) => sum(`SELECT COALESCE(SUM(net_jpy),0) s FROM withdrawals WHERE status='sent' AND method=? AND COALESCE(completed_at, created_at) >= ?`, m, since);
-    return { depPaypay: dep('paypay'), depLtc: dep('ltc'), wdPaypay: wd('paypay'), wdLtc: wd('ltc') };
+  const JST = 9 * 3600;
+  const rows = (table: 'deposits' | 'withdrawals') => {
+    const [amount, done, at] = table === 'deposits'
+      ? ['amount_jpy', `status='confirmed'`, 'COALESCE(confirmed_at, created_at)']
+      : ['net_jpy',    `status='sent'`,      'COALESCE(completed_at, created_at)'];
+    return db.prepare(
+      `SELECT strftime('%Y-%m', ${at} + ${JST}, 'unixepoch') AS month, method, COALESCE(SUM(${amount}),0) AS s
+         FROM ${table} WHERE ${done} GROUP BY month, method`
+    ).all() as { month: string; method: 'paypay' | 'ltc'; s: number }[];
   };
-  const d = new Date((now + 9 * 3600) * 1000);                       // 日本時間の今日 0 時
-  const today = Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000) - 9 * 3600;
+  const months = new Map<string, SalesPeriod>();
+  const get = (m: string) => months.get(m) ?? (months.set(m, { depPaypay: 0, depLtc: 0, wdPaypay: 0, wdLtc: 0 }), months.get(m)!);
+  for (const r of rows('deposits'))    get(r.month)[r.method === 'paypay' ? 'depPaypay' : 'depLtc'] += r.s;
+  for (const r of rows('withdrawals')) get(r.month)[r.method === 'paypay' ? 'wdPaypay' : 'wdLtc'] += r.s;
+  const thisMonth = new Date(Date.now() + JST * 1000).toISOString().slice(0, 7);
+  get(thisMonth);                                               // 今月は取引が無くても出す
   return {
-    today: period(today),
-    days30: period(now - 30 * 86400),
-    all: period(0),
-    userBalance: sum('SELECT COALESCE(SUM(balance),0) s FROM users'),
+    months: [...months.entries()].sort((x, y) => y[0].localeCompare(x[0])).map(([month, p]) => ({ month, ...p })),
+    userBalance: (db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get() as { s: number }).s,
   };
 }
 

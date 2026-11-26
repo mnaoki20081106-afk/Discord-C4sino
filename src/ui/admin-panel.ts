@@ -253,7 +253,7 @@ export function serverHome(notice?: Notice) {
     { icon: ADM.ng(), title: 'NG ワード管理', lines: ['一覧・追加・削除'] },
     { icon: ADM.user(), title: 'ユーザー管理', lines: ['ユーザーを選んで、情報・履歴・chip 付与・手動送金・BAN'] },
     { icon: ADM.chart(), title: '運営データ', lines: ['統計・出金の保留・最近の入金・当選告知の設定'] },
-    { icon: ADM.wallet(), title: '売上', lines: ['入金額・出金額・利益 (今日 / 30 日 / 累計)'] },
+    { icon: ADM.wallet(), title: '売上', lines: ['月ごとの入金額・出金額・利益と累計'] },
     { icon: ADM.bullet(), title: 'コマンド', lines: ['`/mws` MWS で延長したら実行。7 日タイマーをリセット', '`/leet` 文字列を LEET 表記に変換', 'MWS の期限が近づくと、このチャンネルに通知が届く'] },
   ], notice, ADM.server());
   return {
@@ -410,26 +410,36 @@ export function ltcUnmatchedEmbed(address: string, txid: string, valueSat: numbe
 /* ────────────── 売上 ────────────── */
 
 export interface SalesPeriod { depPaypay: number; depLtc: number; wdPaypay: number; wdLtc: number }
-export interface SalesSummary { today: SalesPeriod; days30: SalesPeriod; all: SalesPeriod; userBalance: number }
+/** months は新しい月から順。先頭が今月。month は "2026-11" の形 */
+export interface SalesSummary { months: Array<SalesPeriod & { month: string }>; userBalance: number }
 
 const yen = (n: number) => `${n < 0 ? '-' : ''}¥${Math.abs(n).toLocaleString()}`;
+const monthLabel = (m: string) => `${m.slice(0, 4)}年${Number(m.slice(5, 7))}月`;
+const dep = (p: SalesPeriod) => p.depPaypay + p.depLtc;
+const wd  = (p: SalesPeriod) => p.wdPaypay + p.wdLtc;
 
 export function salesScreen(sum: SalesSummary) {
-  const block = (p: SalesPeriod) => {
-    const dep = p.depPaypay + p.depLtc, wd = p.wdPaypay + p.wdLtc;
-    return [
-      `入金 **${yen(dep)}** (PayPay ${yen(p.depPaypay)} / LTC ${yen(p.depLtc)})`,
-      `出金 **${yen(wd)}** (PayPay ${yen(p.wdPaypay)} / LTC ${yen(p.wdLtc)})`,
-      `利益 **${yen(dep - wd)}**`,
-    ];
-  };
-  const embed = screen('売上', '入金 − 出金 = 利益', [
-    { icon: ADM.chart(), title: '今日', lines: block(sum.today) },
-    { icon: ADM.chart(), title: '30 日', lines: block(sum.days30) },
-    { icon: ADM.wallet(), title: '累計', lines: block(sum.all) },
+  const [now, ...past] = sum.months;
+  const total = sum.months.reduce((a, p) => ({
+    depPaypay: a.depPaypay + p.depPaypay, depLtc: a.depLtc + p.depLtc, wdPaypay: a.wdPaypay + p.wdPaypay, wdLtc: a.wdLtc + p.wdLtc,
+  }), { depPaypay: 0, depLtc: 0, wdPaypay: 0, wdLtc: 0 });
+  const detail = (p: SalesPeriod) => [
+    `入金 **${yen(dep(p))}** (PayPay ${yen(p.depPaypay)} / LTC ${yen(p.depLtc)})`,
+    `出金 **${yen(wd(p))}** (PayPay ${yen(p.wdPaypay)} / LTC ${yen(p.wdLtc)})`,
+    `利益 **${yen(dep(p) - wd(p))}**`,
+  ];
+  const shown = past.slice(0, 12);
+  const pastLines = shown.length
+    ? shown.map(p => `${monthLabel(p.month)}  利益 **${yen(dep(p) - wd(p))}** (入金 ${yen(dep(p))} / 出金 ${yen(wd(p))})`)
+    : ['_まだありません_'];
+  if (past.length > shown.length) pastLines.push(`ほか ${past.length - shown.length} か月 (累計に含む)`);
+  const embed = screen('売上', '月ごとの 入金 − 出金 = 利益', [
+    { icon: ADM.chart(), title: `今月 (${monthLabel(now.month)})`, lines: detail(now) },
+    { icon: ADM.chart(), title: '過去の月', lines: pastLines },
+    { icon: ADM.wallet(), title: '累計', lines: detail(total) },
     { icon: ADM.bullet(), title: '数え方', lines: [
       '入金: 残高に反映した入金 / 出金: 送り終えた出金 (ユーザーに届いた額)',
-      'chip 付与と 0 円のテストプレイは含めない',
+      '月は日本時間で区切る。chip 付与と 0 円のテストプレイは含めない',
       `ユーザーが今持っている残高の合計: ${yen(sum.userBalance)} (これから出金される可能性がある額)`,
     ] },
   ], undefined, ADM.wallet());
