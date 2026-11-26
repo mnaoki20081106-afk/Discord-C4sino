@@ -22,7 +22,7 @@ import { spinRouletteWithCap, payoutMult as rouPayout, type BetKind as RouKind }
 import { dealBaccaratWithCap, payoutMult as bacPayout, type Side as BacSide } from './games/baccarat.js';
 import { startVP, drawVPWithCap, payoutFor, type VPHand } from './games/videopoker.js';
 import { newCraps, addBet, roll as crapsRoll, openExposure, type CrapsBetKind, type CrapsState, type CrapsBet } from './games/craps.js';
-import { MINES_SIZES, newMines, parseOpt as minesOpt, optOf as minesOptOf, multiplier as minesMult, payoutOf as minesPayout, openCell, openedCount, safeCount, type MinesSize, type MinesState } from './games/mines.js';
+import { MINES_SIZES, newMines, parseOpt as minesOpt, optOf as minesOptOf, multiplier as minesMult, payoutOf as minesPayout, openCell, openedCount, safeCount, revealRemaining as minesReveal, type MinesSize, type MinesState } from './games/mines.js';
 import {
   formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker,
   crapsDiceLine, cardButtonEmoji, cardText,
@@ -895,27 +895,26 @@ function minesGrid(st: MinesState): string {
   return lines.join('\n');
 }
 
-/** 宝石を全部開けたときの払戻し (このゲームで払う可能性がある最大額) */
-const minesMaxPayout = (st: MinesState, bet: number) => minesPayout(bet, st.size, st.mines, safeCount(st));
+/** 運営の残高で「宝石として開けて良い」最大のマス数。bet × 倍率(k) ≤ cap を満たす最大 k */
+function minesGemCap(bet: number, size: number, mines: number, cap: number): number {
+  for (let k = size * size - mines; k >= 0; k--) if (bet * minesMult(size, mines, k) <= cap) return k;
+  return 0;
+}
 
 async function playMines(i: TI, r: Round) {
   const { size, mines } = minesOpt(r.p.opt);
-  const st = newMines(size, mines);
-  const entry = sessions.create(r.uid, 'mines', st, r.bet, r.mix, r.test);
-  if (!r.test) {
-    // 上限は BET の時点で判断する。最大額が運営の払える額に収まらなければ始めずに返金し、
-    // 収まればその額を最後まで確保しておく (ゲームの途中で止まることはない)
-    const cap = await housePayoutCap(entry.id);
-    if (minesMaxPayout(st, r.bet) > cap) {
-      sessions.drop(entry.id);
-      credit(r.uid, r.bet, r.mix, 'refund:mines:cap');
-      const maxBet = Math.floor(cap / minesMult(size, mines, safeCount(st)));
-      return refresh(i, 'mines', maxBet >= BET_LIMITS.mines.min
-        ? `${size}×${size}・爆弾 ${mines} 個の BET は ¥${maxBet.toLocaleString()} までです。BET 額を変えるか、爆弾の数を減らしてください`
-        : `今は ${size}×${size}・爆弾 ${mines} 個では遊べません。爆弾の数を減らしてください`);
-    }
-    setCrapsExposure(entry.id, minesMaxPayout(st, r.bet));
+  // テストプレイは運営の残高に縛られない (キャップ無し)
+  const cap = r.test ? Number.MAX_SAFE_INTEGER : await housePayoutCap();
+  const gemCap = minesGemCap(r.bet, size, mines, cap);
+  // 1 マス目の払戻しすら払えないなら始めずに返金
+  if (gemCap < 1) {
+    if (!r.test) credit(r.uid, r.bet, r.mix, 'refund:mines:cap');
+    return refresh(i, 'mines', '運営が払える額を超えるため、この BET 額と爆弾の数では遊べません。BET 額を下げるか爆弾を減らしてください (BET は返金しました)');
   }
+  const st = newMines(size, mines, gemCap);
+  const entry = sessions.create(r.uid, 'mines', st, r.bet, r.mix, r.test);
+  // この回で払う可能性がある最大額 (= gemCap まで開けた時の払戻し) を確保しておく
+  if (!r.test) setCrapsExposure(entry.id, minesPayout(r.bet, size, mines, gemCap));
   await renderMines(i, entry.id);
 }
 
@@ -939,11 +938,12 @@ export async function onMinesAction(i: ButtonInteraction, action: 'open' | 'cash
       const cell = Number(arg);
       if (!Number.isInteger(cell)) return renderMines(i, sid!);
       const res = openCell(st, cell);
-      if (res === 'safe' && openedCount(st) >= safeCount(st)) st.phase = 'cashed';   // 宝石を全部開けたら自動で CASH OUT
+      if (res === 'safe' && openedCount(st) >= safeCount(st)) { st.phase = 'cashed'; minesReveal(st); }   // 宝石を全部開けたら自動で CASH OUT
       return renderMines(i, sid!);
     }
     if (openedCount(st) === 0) return renderMines(i, sid!, '1 マス以上開けてから CASH OUT できます');
     st.phase = 'cashed';
+    minesReveal(st);
     return renderMines(i, sid!);
   } finally {
     busy.delete(k);
