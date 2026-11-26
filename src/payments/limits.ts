@@ -26,7 +26,7 @@ export const MIN_BET_CHIPS = {
 
 export const MAX_BET_CHIPS = {
   blackjack:  50_000,
-  slots:      10_000,
+  slots:      50_000,
   roulette:   50_000,
   baccarat:   50_000,
   videopoker: 50_000,

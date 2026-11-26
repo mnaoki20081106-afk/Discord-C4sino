@@ -117,7 +117,6 @@ export function rulesPanel(cfg: RulesConfig): { embeds: EmbedBuilder[] } {
       ] },
       { icon: ICON.balance(), title: '第9条  免責', lines: [
         'Discord・PayPay・LTC ネットワークの障害、レートの変動、通信の不具合による損失は補償しません',
-        'BET の上限は運営の残高によって変わります',
         'サービスの内容は、予告なく変更・停止・終了することがあります',
       ] },
       { icon: ICON.sparkle(), title: '第10条  規約の変更', lines: [
