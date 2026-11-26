@@ -257,6 +257,8 @@ function resultLine(bet, payout) {
         return { text: `**LOSE  -¥${bet.toLocaleString()}**`, color: COLOR.black };
     return { text: '**PUSH**  — BET 返却', color: COLOR.silver };
 }
+/** +¥1,200 / -¥400 の形 */
+const signedYen = (n) => `${n < 0 ? '-' : '+'}¥${Math.abs(n).toLocaleString()}`;
 /* ────────────── 応答の共通処理 ────────────── */
 /** 本人の操作は同時に 1 つだけ (BET の連打で二重に引き落とさないため)。 */
 const busy = new Set();
@@ -783,7 +785,7 @@ function crapsView(uid, sid, st, notice) {
         fields: [
             { name: `台の上のベット (${st.bets.length})`, value: betsText.slice(0, 1024) },
             { name: '直近の振り', value: hist.slice(-1000) },
-            { name: 'この台の累計', value: `${net >= 0 ? '+' : ''}¥${net.toLocaleString()} (賭 ¥${st.totalWagered.toLocaleString()} / 戻 ¥${st.totalReturned.toLocaleString()})` },
+            { name: 'この台の累計', value: `${signedYen(net)} (賭 ¥${st.totalWagered.toLocaleString()} / 戻 ¥${st.totalReturned.toLocaleString()})` },
         ],
         primary: new ActionRowBuilder().addComponents(withEmoji(new ButtonBuilder().setCustomId('cr:roll').setLabel('ROLL').setStyle(ButtonStyle.Primary).setDisabled(st.bets.length === 0), 'game_craps'), new ButtonBuilder().setCustomId('cr:undo').setLabel('直前のベット取消').setStyle(ButtonStyle.Secondary).setDisabled(st.bets.length === 0), new ButtonBuilder().setCustomId('cr:end').setLabel('END').setStyle(ButtonStyle.Secondary)),
     };
@@ -880,7 +882,7 @@ export async function onCrapsAction(i, action) {
         clearCrapsExposure(sid);
         sessions.drop(sid);
         const net = st.totalReturned - st.totalWagered;
-        return openCrapsTable(i, `前の台の累計: ${net >= 0 ? '+' : ''}¥${net.toLocaleString()} (賭 ¥${st.totalWagered.toLocaleString()} / 戻 ¥${st.totalReturned.toLocaleString()})${st.bets.length ? '。台に残っていたベットは返金されません' : ''}`);
+        return openCrapsTable(i, `前の台の累計: ${signedYen(net)} (賭 ¥${st.totalWagered.toLocaleString()} / 戻 ¥${st.totalReturned.toLocaleString()})${st.bets.length ? '。台に残っていたベットは返金されません' : ''}`);
     }
     // roll
     if (st.bets.length === 0)
