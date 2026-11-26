@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, Partials, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, Events, PermissionFlagsBits, EmbedBuilder, ButtonBuilder, ButtonStyle, MessageFlags, } from 'discord.js';
-import { adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal, panelLabel, } from './ui/admin-panel.js';
+import { adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal, panelLabel, isAdminPanelKey, } from './ui/admin-panel.js';
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
 import * as sessions from './games/session-store.js';
 import { openTable, replayInPlace, onTableButton, onTableSelect, onTableModal, onBlackjackAction, onVideoPokerAction, onCrapsAction, isGame, setTablesClient, } from './tables.js';
@@ -898,13 +898,17 @@ async function showAdmin(i, payload) {
     }
     return i.reply({ ...payload, flags: MessageFlags.Ephemeral });
 }
+/** ゲーム管理パネルが扱うパネル (ゲーム・入出金・ルール説明など)。管理パネル自身は含めない。 */
+function gamePanels(guildId) {
+    return installedPanels(guildId).filter(p => !isAdminPanelKey(p.game));
+}
 function installedPanels(guildId) {
     return db.prepare('SELECT channel_id, message_id, game FROM panels WHERE guild_id=? ORDER BY rowid').all(guildId);
 }
 /** 設置するパネルの中身。key は PANEL_KINDS の key。 */
 function panelPayload(guildId, key) {
     if (key === 'admin:games')
-        return gamesLanding(installedPanels(guildId));
+        return gamesLanding(gamePanels(guildId));
     if (key === 'admin:wallet')
         return walletLanding(adminWallets());
     if (key === 'admin:server')
@@ -967,7 +971,7 @@ async function renderAdmin(i, screenName, notice) {
     const gid = i.guildId;
     const s = selOf(i.user.id);
     switch (screenName) {
-        case 'games': return showAdmin(i, gamesScreen(installedPanels(gid), s, notice));
+        case 'games': return showAdmin(i, gamesScreen(gamePanels(gid), s, notice));
         case 'wallet': return showAdmin(i, walletScreen(adminWallets(), s.walletId, notice));
         case 'server': return showAdmin(i, serverHome(notice));
         case 'ng': return showAdmin(i, ngScreen(listBannedWords(gid).map(w => w.word), notice));
@@ -1017,18 +1021,20 @@ async function onAdminPanel(i) {
         if (act === 'install') {
             if (!s.kind || !s.channelId)
                 return renderAdmin(i, 'games', { ok: false, text: '種類とチャンネルを選んでください' });
+            if (isAdminPanelKey(s.kind))
+                return renderAdmin(i, 'games', { ok: false, text: '管理パネルは /admin panel で設置してください' });
             await i.deferUpdate();
             const err = await installPanel(gid, s.channelId, s.kind);
             await refreshAdminLandings(gid, ['admin:games']);
             return renderAdmin(i, 'games', err ? { ok: false, text: err } : { ok: true, text: `${panelLabel(s.kind)} を <#${s.channelId}> に設置しました` });
         }
         if (act === 'reinstall') {
-            const n = installedPanels(gid).length;
-            return showAdmin(i, confirmScreen('全パネルを再設置', [`設置済みの ${n} 個のパネルを消して、同じチャンネルに置き直します`, '置き直したパネルは最新の見た目になります'], 'ap:games:reinstallgo', 'ap:open:games'));
+            const n = gamePanels(gid).length;
+            return showAdmin(i, confirmScreen('全パネルを再設置', [`設置済みの ${n} 個のパネル (ゲーム・入出金・ルール説明など) を消して、同じチャンネルに置き直します`, '置き直したパネルは最新の見た目になります', '管理パネルは対象外 (/admin panel で置き直す)'], 'ap:games:reinstallgo', 'ap:open:games'));
         }
         if (act === 'reinstallgo') {
             await i.deferUpdate();
-            const rows = installedPanels(gid);
+            const rows = gamePanels(gid);
             const failed = [];
             for (const p of rows) {
                 const err = await installPanel(gid, p.channel_id, p.game);

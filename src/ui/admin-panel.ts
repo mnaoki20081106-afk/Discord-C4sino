@@ -33,11 +33,16 @@ export const PANEL_KINDS: Array<{ key: string; label: string; emoji: string; gro
   { key: 'overview:cashier',    label: 'ルール: 入出金',           emoji: 'ui_wallet',       group: 'ルール説明' },
   { key: 'mws',   label: 'MWS 延長タイマー', emoji: 'adm_server', group: '運営' },
   { key: 'leet',  label: 'LEET 変換',        emoji: 'adm_leet',   group: '運営' },
-  { key: 'admin:games',  label: 'ゲーム管理パネル',     emoji: 'adm_panel',  group: '管理' },
-  { key: 'admin:wallet', label: 'ウォレット管理パネル', emoji: 'adm_wallet', group: '管理' },
-  { key: 'admin:server', label: 'サーバー管理パネル',   emoji: 'adm_server', group: '管理' },
 ];
-export const panelLabel = (key: string) => PANEL_KINDS.find(k => k.key === key)?.label ?? key;
+/** 管理パネル。ゲーム管理パネルの対象外で、/admin panel でだけ設置する。 */
+export const ADMIN_PANEL_KINDS = [
+  { key: 'admin:games',  label: 'ゲーム管理パネル' },
+  { key: 'admin:wallet', label: 'ウォレット管理パネル' },
+  { key: 'admin:server', label: 'サーバー管理パネル' },
+];
+export const isAdminPanelKey = (key: string) => key === 'admin' || key.startsWith('admin:');
+export const panelLabel = (key: string) =>
+  [...PANEL_KINDS, ...ADMIN_PANEL_KINDS].find(k => k.key === key)?.label ?? key;
 /** 管理パネル専用の絵文字。ユーザー向けの画面と混同しないよう、別の絵柄を使う。 */
 const ADM = {
   badge:  () => emoji('adm_badge') || '◆',
