@@ -33,6 +33,7 @@ export const GAME_ICON = {
     baccarat: () => e('game_baccarat'),
     videopoker: () => e('game_videopoker'),
     craps: () => e('game_craps'),
+    mines: () => e('game_mines'),
 };
 /** 箇条書き 1 行 */
 export const bullet = (s) => `${ICON.arrow()} ${s}`;

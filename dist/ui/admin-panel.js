@@ -18,6 +18,7 @@ export const PANEL_KINDS = [
     { key: 'baccarat', label: 'バカラ', emoji: 'game_baccarat', group: 'ゲーム' },
     { key: 'videopoker', label: 'ビデオポーカー', emoji: 'game_videopoker', group: 'ゲーム' },
     { key: 'craps', label: 'クラップス', emoji: 'game_craps', group: 'ゲーム' },
+    { key: 'mines', label: 'マインスイーパー', emoji: 'game_mines', group: 'ゲーム' },
     { key: 'cashier', label: '入出金 (Cashier)', emoji: 'ui_wallet', group: '入出金' },
     { key: 'overview:all', label: 'ルール: 全ゲーム概要', emoji: 'ui_crown', group: 'ルール説明' },
     { key: 'overview:cashier', label: 'ルール: 入出金', emoji: 'ui_wallet', group: 'ルール説明' },

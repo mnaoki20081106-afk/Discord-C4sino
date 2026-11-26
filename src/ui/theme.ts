@@ -37,6 +37,7 @@ export const GAME_ICON: Record<string, () => string> = {
   baccarat:   () => e('game_baccarat'),
   videopoker: () => e('game_videopoker'),
   craps:      () => e('game_craps'),
+  mines:      () => e('game_mines'),
 };
 
 export interface Section {

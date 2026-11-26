@@ -17,22 +17,23 @@ import { spinRouletteWithCap, payoutMult as rouPayout } from './games/roulette.j
 import { dealBaccaratWithCap, payoutMult as bacPayout } from './games/baccarat.js';
 import { startVP, drawVPWithCap, payoutFor } from './games/videopoker.js';
 import { newCraps, addBet, roll as crapsRoll, openExposure } from './games/craps.js';
+import { MINES_SIZES, newMines, parseOpt as minesOpt, optOf as minesOptOf, multiplier as minesMult, payoutOf as minesPayout, openCell, openedCount, safeCount } from './games/mines.js';
 import { formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker, crapsDiceLine, cardButtonEmoji, cardText, } from './ui/format-games.js';
 import { bjActionsRow } from './ui/panels.js';
 import { housePayoutCap, clampPayout, setCrapsExposure, clearCrapsExposure } from './payments/liquidity.js';
 import * as ach from './achievements.js';
 import { MIN_BET_CHIPS, MAX_BET_CHIPS } from './payments/limits.js';
 import { L } from './ui/leet.js';
-import { emojiRef } from './ui/emoji-ids.js';
+import { emoji, emojiRef } from './ui/emoji-ids.js';
 import { COLOR, GAME_ICON } from './ui/theme.js';
-export const GAMES = ['blackjack', 'slots', 'roulette', 'baccarat', 'videopoker', 'craps'];
+export const GAMES = ['blackjack', 'slots', 'roulette', 'baccarat', 'videopoker', 'craps', 'mines'];
 export const isGame = (s) => GAMES.includes(s);
 let client = null;
 export function setTablesClient(c) { client = c; }
 /* ────────────── 共通定数 ────────────── */
 /** テストプレイで払戻しを計算するための仮 BET。残高からは引かれない。 */
 export const TEST_BET = 100;
-export const BET_LIMITS = Object.fromEntries(['blackjack', 'slots', 'roulette', 'baccarat', 'videopoker', 'craps']
+export const BET_LIMITS = Object.fromEntries(['blackjack', 'slots', 'roulette', 'baccarat', 'videopoker', 'craps', 'mines']
     .map(g => [g, { min: MIN_BET_CHIPS[g], max: MAX_BET_CHIPS[g] }]));
 const TITLE = {
     blackjack: `🂡 ${L('BLACKJACK')}`,
@@ -41,10 +42,11 @@ const TITLE = {
     baccarat: `🎴 ${L('BACCARAT')}`,
     videopoker: `🃏 ${L('VIDEO POKER')}`,
     craps: `🎲 ${L('CRAPS')}`,
+    mines: `💣 ${L('MINES')}`,
 };
 const NAME = {
     blackjack: L('BLACKJACK'), slots: L('SLOTS'), roulette: L('ROULETTE'),
-    baccarat: L('BACCARAT'), videopoker: L('VIDEO POKER'), craps: L('CRAPS'),
+    baccarat: L('BACCARAT'), videopoker: L('VIDEO POKER'), craps: L('CRAPS'), mines: L('MINES'),
 };
 /** 登録済みのアプリ絵文字があればボタンに付ける。 */
 function withEmoji(b, name) {
@@ -109,7 +111,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS bet_prefs (
   PRIMARY KEY (discord_id, game)
 );`);
 function defaultOpt(game) {
-    return game === 'baccarat' ? 'player' : game === 'roulette' ? 'red' : '';
+    return game === 'baccarat' ? 'player' : game === 'roulette' ? 'red' : game === 'mines' ? '4x4:3' : '';
 }
 export function getPrefs(uid, game) {
     const r = db.prepare('SELECT pp, ltc, test, opt FROM bet_prefs WHERE discord_id=? AND game=?').get(uid, game);
@@ -179,6 +181,10 @@ function betText(p) {
     return `¥${(p.pp + p.ltc).toLocaleString()}  (PP ¥${p.pp.toLocaleString()} / LTC ¥${p.ltc.toLocaleString()})`;
 }
 function optText(game, p) {
+    if (game === 'mines') {
+        const m = minesOpt(p.opt);
+        return { name: 'マス / 爆弾', value: `${m.size}×${m.size} / 爆弾 ${m.mines}`, inline: true };
+    }
     if (game === 'baccarat')
         return { name: '賭け先', value: BAC_SIDES.find(([s]) => s === p.opt)?.[1] ?? p.opt, inline: true };
     if (game === 'roulette') {
@@ -186,6 +192,19 @@ function optText(game, p) {
         return { name: '掛け方', value: kind === 'number' ? (n ? `Single Number ${n}` : 'Single Number (数字未指定)') : (ROU_LABEL[kind] ?? kind), inline: true };
     }
     return null;
+}
+/** マインスイーパー: マスの数と爆弾の数の選択 (2 段) */
+function minesOptionRows(p, disabled) {
+    const cur = minesOpt(p.opt);
+    const size = new StringSelectMenuBuilder().setCustomId('t:mines:size').setPlaceholder('マスの数').setDisabled(disabled)
+        .addOptions(MINES_SIZES.map(n => new StringSelectMenuOptionBuilder()
+        .setValue(String(n)).setLabel(`${n}×${n} マス`).setDescription(`${n * n} マス`).setDefault(n === cur.size)));
+    const n = cur.size * cur.size;
+    const count = new StringSelectMenuBuilder().setCustomId('t:mines:count').setPlaceholder('爆弾の数').setDisabled(disabled)
+        .addOptions(Array.from({ length: n - 1 }, (_, k) => k + 1).map(m => new StringSelectMenuOptionBuilder()
+        .setValue(String(m)).setLabel(`爆弾 ${m} 個`)
+        .setDescription(`1 マス目 ×${minesMult(cur.size, m, 1)} / 宝石 ${n - m} マス`).setDefault(m === cur.mines)));
+    return [new ActionRowBuilder().addComponents(size), new ActionRowBuilder().addComponents(count)];
 }
 function optionsRow(game, p, disabled, sid) {
     if (game === 'baccarat') {
@@ -235,6 +254,14 @@ function renderTable(v) {
         .setDescription(desc.join('\n\n').slice(0, 4096))
         .addFields(...(v.fields ?? []), { name: 'BET', value: betText(v.prefs), inline: true }, ...(opt ? [opt] : []), { name: '残高', value: `PP ¥${r.pp.toLocaleString()} / LTC ¥${r.ltc.toLocaleString()}`, inline: true });
     const rows = [];
+    if (v.bare) {
+        rows.push(...(v.actions ?? []));
+        if (v.primary)
+            rows.push(v.primary);
+        return { content: '', embeds: [embed], components: rows.slice(0, 5), files: [], attachments: [] };
+    }
+    if (v.game === 'mines')
+        rows.push(...minesOptionRows(v.prefs, !!v.inRound));
     const o = optionsRow(v.game, v.prefs, !!v.inRound && v.game !== 'craps', v.sid);
     if (o)
         rows.push(o);
@@ -346,6 +373,11 @@ export async function openTable(i, game, opt) {
     await i.deferReply({ flags: MessageFlags.Ephemeral });
     if (game === 'craps')
         return openCrapsTable(i);
+    if (game === 'mines') {
+        const active = activeMines(i.user.id);
+        if (active)
+            return renderMines(i, active, '進行中のゲームの続きです');
+    }
     const last = lastShown.get(key(i.user.id, game));
     return show(i, { game, uid: i.user.id, prefs: getPrefs(i.user.id, game), ...last });
 }
@@ -398,6 +430,16 @@ export async function onTableSelect(i) {
     }
     if (i.customId.startsWith('cr:add'))
         return onCrapsAdd(i, v);
+    if (i.customId === 't:mines:size' || i.customId === 't:mines:count') {
+        const p = getPrefs(i.user.id, 'mines');
+        const cur = minesOpt(p.opt);
+        const n = Number(v);
+        const next = i.customId === 't:mines:size'
+            ? minesOptOf(n, Math.min(cur.mines, n * n - 1))
+            : minesOptOf(cur.size, n);
+        savePrefs(i.user.id, 'mines', { ...p, opt: next });
+        return refresh(i, 'mines');
+    }
 }
 /** テーブルから開いた入力画面の送信 */
 export async function onTableModal(i) {
@@ -490,6 +532,14 @@ async function onBet(i, game) {
             await ack(i);
             return openCrapsTable(i);
         }
+        if (game === 'mines') {
+            // 進行中のゲームがあれば、新しく BET せずにその続きを出す
+            const active = activeMines(i.user.id);
+            if (active) {
+                await ack(i);
+                return renderMines(i, active, '進行中のゲームの続きです');
+            }
+        }
         const round = await prepareRound(i, game);
         if (!round)
             return;
@@ -501,6 +551,7 @@ async function onBet(i, game) {
             case 'roulette': return await playRoulette(i, round);
             case 'baccarat': return await playBaccarat(i, round);
             case 'videopoker': return await playVideoPoker(i, round);
+            case 'mines': return await playMines(i, round);
         }
     }
     finally {
@@ -773,6 +824,156 @@ async function renderVideoPoker(i, sid, st) {
         result: '残すカードを HOLD して DRAW',
         actions: [vpHoldButtons(st, sid)],
         primary: new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`vp:draw:${sid}`).setLabel('DRAW').setStyle(ButtonStyle.Primary)),
+    });
+}
+/* ────────────── MINES (マインスイーパー) ────────────── */
+const MN = {
+    tile: () => emoji('mines_tile') || '▫️',
+    gem: () => emoji('mines_gem') || '◆',
+    bomb: () => emoji('mines_bomb') || '✖',
+};
+/** 本人の進行中のマインスイーパー (あれば) */
+function activeMines(uid) {
+    return sessions.listByUser(uid).find(e => e.game === 'mines' && e.state.phase === 'play')?.id ?? null;
+}
+/** 盤面の絵文字。終わったら爆弾の位置も見せる。 */
+function minesGrid(st) {
+    const done = st.phase !== 'play';
+    const lines = [];
+    for (let r = 0; r < st.size; r++) {
+        let line = '';
+        for (let c = 0; c < st.size; c++) {
+            const k = r * st.size + c;
+            // 終わったら爆弾をすべて見せる。開けた宝石は宝石、開けなかったマスは伏せたまま
+            line += st.bombs[k] && (done || st.opened[k]) ? MN.bomb() : st.opened[k] ? MN.gem() : MN.tile();
+        }
+        lines.push(`### ${line}`);
+    }
+    return lines.join('\n');
+}
+/** 次の 1 マスを開けてよいか (払戻しが運営の払える額を超えないか) */
+async function minesCanOpenNext(sid, st, bet, test) {
+    const k = openedCount(st);
+    if (k >= safeCount(st))
+        return false;
+    if (test)
+        return true;
+    return minesPayout(bet, st.size, st.mines, k + 1) <= await housePayoutCap(sid);
+}
+async function playMines(i, r) {
+    const { size, mines } = minesOpt(r.p.opt);
+    const st = newMines(size, mines);
+    const entry = sessions.create(r.uid, 'mines', st, r.bet, r.mix, r.test);
+    // 1 マス目の払戻しすら運営が払えないなら、始めずに返金する
+    if (!(await minesCanOpenNext(entry.id, st, r.bet, r.test))) {
+        sessions.drop(entry.id);
+        if (!r.test)
+            credit(r.uid, r.bet, r.mix, 'refund:mines:cap');
+        return refresh(i, 'mines', '運営が払える額を超えるため、この BET 額と爆弾の数では遊べません。BET 額を下げるか爆弾を減らしてください (BET は返金しました)');
+    }
+    if (!r.test)
+        setCrapsExposure(entry.id, 0);
+    await renderMines(i, entry.id);
+}
+/** mn:open:<マス>:<sid> / mn:cash:<sid> */
+export async function onMinesAction(i, action, arg) {
+    assertNotBanned(i.user.id);
+    const sid = sidOf(i);
+    const entry = sid ? sessions.get(sid) : undefined;
+    if (!entry || entry.discordId !== i.user.id || entry.game !== 'mines') {
+        return i.reply({ content: 'このゲームは終了しています。BET で次のゲームを始めてください', flags: MessageFlags.Ephemeral });
+    }
+    const k = key(i.user.id, 'mines');
+    if (busy.has(k))
+        return i.deferUpdate().catch(() => { });
+    busy.add(k);
+    try {
+        await ack(i);
+        const st = entry.state;
+        const test = !!entry.test;
+        if (st.phase !== 'play')
+            return renderMines(i, sid);
+        if (action === 'open') {
+            const cell = Number(arg);
+            if (!Number.isInteger(cell))
+                return renderMines(i, sid);
+            if (!(await minesCanOpenNext(sid, st, entry.bet, test))) {
+                return renderMines(i, sid, '次のマスの払戻しが運営の払える額を超えるため、これ以上開けられません。CASH OUT してください');
+            }
+            const res = openCell(st, cell);
+            if (res === 'safe' && !test)
+                setCrapsExposure(sid, minesPayout(entry.bet, st.size, st.mines, openedCount(st)));
+            if (res === 'safe' && openedCount(st) >= safeCount(st))
+                st.phase = 'cashed'; // 宝石を全部開けたら自動で CASH OUT
+            return renderMines(i, sid);
+        }
+        if (openedCount(st) === 0)
+            return renderMines(i, sid, '1 マス以上開けてから CASH OUT できます');
+        st.phase = 'cashed';
+        return renderMines(i, sid);
+    }
+    finally {
+        busy.delete(k);
+    }
+}
+async function renderMines(i, sid, notice) {
+    const entry = sessions.get(sid);
+    const st = entry.state;
+    const test = !!entry.test;
+    const uid = i.user.id;
+    const p = getPrefs(uid, 'mines');
+    const k = openedCount(st);
+    const head = `**${st.size}×${st.size} / 爆弾 ${st.mines}** — 開けた宝石 ${k} / ${safeCount(st)}`;
+    if (st.phase !== 'play') {
+        // 払戻しを先に済ませてから描く (残高の表示を正しくするため)
+        let payout = 0;
+        if (st.phase === 'cashed') {
+            payout = minesPayout(entry.bet, st.size, st.mines, k);
+            if (!test) {
+                payout = await clampPayout(payout, sid);
+                credit(uid, payout, entry.mix, 'win:mines', sid);
+            }
+        }
+        clearCrapsExposure(sid);
+        sessions.drop(sid);
+        const res = resultLine(entry.bet, payout);
+        const what = st.phase === 'bust' ? `**${MN.bomb()} 爆弾**` : `**CASH OUT ×${minesMult(st.size, st.mines, k)}**`;
+        await show(i, { game: 'mines', uid, prefs: p, test, board: `${minesGrid(st)}\n${head}`, result: `${what}  ${res.text}`, color: res.color });
+        await settled(i, 'mines', entry.bet, payout, test);
+        return;
+    }
+    sessions.save(sid);
+    const canOpen = await minesCanOpenNext(sid, st, entry.bet, test);
+    const now = minesMult(st.size, st.mines, k);
+    const next = k < safeCount(st) ? minesMult(st.size, st.mines, k + 1) : null;
+    const lines = [
+        head,
+        k > 0 ? `今 **×${now}** (CASH OUT で ¥${minesPayout(entry.bet, st.size, st.mines, k).toLocaleString()})` : '最初のマスを選んでください',
+        next !== null ? `次のマス **×${next}** (¥${minesPayout(entry.bet, st.size, st.mines, k + 1).toLocaleString()})` : '',
+    ].filter(Boolean);
+    const grid = [];
+    for (let r = 0; r < st.size; r++) {
+        const row = new ActionRowBuilder();
+        for (let c = 0; c < st.size; c++) {
+            const cell = r * st.size + c;
+            const opened = st.opened[cell];
+            const b = new ButtonBuilder().setCustomId(`mn:open:${cell}:${sid}`).setStyle(ButtonStyle.Secondary).setDisabled(opened || !canOpen);
+            const ref = emojiRef(opened ? 'mines_gem' : 'mines_tile');
+            if (ref)
+                b.setEmoji(ref);
+            else
+                b.setLabel(opened ? '◆' : '?');
+            row.addComponents(b);
+        }
+        grid.push(row);
+    }
+    const cashLabel = k > 0 ? `CASH OUT ¥${minesPayout(entry.bet, st.size, st.mines, k).toLocaleString()}` : 'CASH OUT';
+    await show(i, {
+        game: 'mines', uid, prefs: p, test, sid, inRound: true, bare: true,
+        board: lines.join('\n'),
+        notice: notice ?? (canOpen ? undefined : (k < safeCount(st) ? '次のマスの払戻しが運営の払える額を超えるため、これ以上開けられません。CASH OUT してください' : undefined)),
+        actions: grid,
+        primary: new ActionRowBuilder().addComponents(withEmoji(new ButtonBuilder().setCustomId(`mn:cash:${sid}`).setLabel(cashLabel).setStyle(ButtonStyle.Primary).setDisabled(k === 0), 'ui_chip')),
     });
 }
 /* ────────────── CRAPS ────────────── */

@@ -54,7 +54,7 @@ export function leetPanel() {
 
 const GAME_EMOJI: Record<Game, string> = {
   blackjack: 'game_blackjack', slots: 'game_slots', roulette: 'game_roulette',
-  baccarat: 'game_baccarat', videopoker: 'game_videopoker', craps: 'game_craps',
+  baccarat: 'game_baccarat', videopoker: 'game_videopoker', craps: 'game_craps', mines: 'game_mines',
 };
 
 /** ボタン。登録済みのアプリ絵文字があれば付ける。 */

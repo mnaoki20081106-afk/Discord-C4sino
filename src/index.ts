@@ -15,7 +15,7 @@ import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, credit
 import * as sessions from './games/session-store.js';
 import {
   openTable, replayInPlace, onTableButton, onTableSelect, onTableModal,
-  onBlackjackAction, onVideoPokerAction, onCrapsAction, isGame, setTablesClient,
+  onBlackjackAction, onVideoPokerAction, onCrapsAction, onMinesAction, isGame, setTablesClient,
 } from './tables.js';
 import { depositPanel, depositMethodPicker, withdrawMethodPicker, balanceReply, leetPanel, mwsPanel, replayRowFromCtx, publicGamePanel } from './ui/panels.js';
 import * as mws from './mws/timer.js';
@@ -376,7 +376,7 @@ function formatReason(reason: string): string {
   const tail = rest.join(':');
   const gameLabel: Record<string, string> = {
     blackjack: 'Blackjack', slots: 'Slots', roulette: 'Roulette',
-    baccarat: 'Baccarat', videopoker: 'Video Poker', craps: 'Craps',
+    baccarat: 'Baccarat', videopoker: 'Video Poker', craps: 'Craps', mines: 'Mines',
   };
   switch (head) {
     case 'bet':    return `BET ${gameLabel[tail] ?? tail}`;
@@ -836,6 +836,7 @@ async function onButton(i: ButtonInteraction) {
     if (kind === 'hold' || kind === 'draw') return onVideoPokerAction(i, kind, arg);
     return openTable(i, 'videopoker');
   }
+  if (ns === 'mn' && (kind === 'open' || kind === 'cash')) return onMinesAction(i, kind, arg);
   if (ns === 'cr') {
     if (kind === 'roll' || kind === 'undo' || kind === 'end') return onCrapsAction(i, kind);
     return openTable(i, 'craps');

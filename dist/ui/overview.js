@@ -1,4 +1,5 @@
 import { SYMBOLS } from '../games/slots.js';
+import { multiplier as minesMult, HOUSE_EDGE as MINES_EDGE } from '../games/mines.js';
 import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY, MIN_BET_CHIPS, MAX_BET_CHIPS, LTC_NETWORK_FEE_JPY } from '../payments/limits.js';
 import { L } from './leet.js';
 import { slotEmoji } from './format-games.js';
@@ -28,7 +29,7 @@ const yen = (n) => `¥${n.toLocaleString()}`;
 const pct = (x, d = 2) => `${(x * 100).toFixed(d)}%`;
 const NAME = {
     blackjack: L('BLACKJACK'), slots: L('SLOTS'), roulette: L('ROULETTE'),
-    baccarat: L('BACCARAT'), videopoker: L('VIDEO POKER'), craps: L('CRAPS'),
+    baccarat: L('BACCARAT'), videopoker: L('VIDEO POKER'), craps: L('CRAPS'), mines: L('MINES'),
 };
 const betRange = (g) => `BET ${yen(MIN_BET_CHIPS[g])} 〜 ${yen(MAX_BET_CHIPS[g])}${g === 'craps' ? ' (1 つの賭けごと)' : ''}`;
 const HOWTO_TABLE = [
@@ -125,6 +126,29 @@ function info(g) {
             rtp: ["主な還元率: Pass **98.59%** / Don't Pass **98.64%** / Place 6・8 **98.48%** / Field **97.22%** / Any 7 **83.33%**"],
             howto: ['PLAY で自分専用の台が開く', '賭けの種類を選ぶと、今の BET 額で台に置かれる', 'ROLL でサイコロを振る'],
         };
+        case 'mines': {
+            const x = (size, mines, k) => `×${minesMult(size, mines, k).toLocaleString()}`;
+            return {
+                tagline: '爆弾を避けて宝石のマスを開ける。開けるほど倍率アップ',
+                rules: [
+                    'マスの数 (3×3 / 4×4) と爆弾の数を選んで BET',
+                    '爆弾の位置は BET した時点で決まり、途中で変わらない',
+                    '宝石のマスを開けるたびに倍率が上がる',
+                    '好きなときに CASH OUT すると、その時点の倍率で払い戻し',
+                    '爆弾を開けたら BET は没収。宝石を全部開けたら自動で CASH OUT',
+                    '払い戻しが運営の払える額を超えるときは、それ以上開けられない (その時点で CASH OUT)',
+                ],
+                payouts: [
+                    `倍率 = 確率どおりの倍率 × ${1 - MINES_EDGE} (小数 2 桁で切り捨て)`,
+                    `4×4・爆弾 3: 1 マス **${x(4, 3, 1)}** / 3 マス **${x(4, 3, 3)}** / 6 マス **${x(4, 3, 6)}**`,
+                    `4×4・爆弾 8: 1 マス **${x(4, 8, 1)}** / 3 マス **${x(4, 8, 3)}** / 全部 **${x(4, 8, 8)}**`,
+                    `3×3・爆弾 1: 1 マス **${x(3, 1, 1)}** / 4 マス **${x(3, 1, 4)}** / 全部 **${x(3, 1, 8)}**`,
+                ],
+                odds: ['1 マス目が宝石の確率 = 宝石のマス ÷ 全マス', `例: 4×4・爆弾 3 は **${pct(13 / 16)}** / 3×3・爆弾 1 は **${pct(8 / 9)}**`],
+                rtp: [`還元率 **${pct(1 - MINES_EDGE, 0)}** 以下 (どこで CASH OUT しても同じ。切り捨てでわずかに下がる)`],
+                howto: ['PLAY で自分専用のテーブルが開く', 'マスの数と爆弾の数を選んで BET', 'マスを開けて、好きなときに CASH OUT'],
+            };
+        }
     }
 }
 const depositLines = () => [
@@ -184,7 +208,7 @@ export function cashierEmbed(footer = 'C4sino · Cashier') {
 }
 /** 全ゲームの概要を 1 枚に */
 function allOverview() {
-    const games = ['blackjack', 'slots', 'roulette', 'baccarat', 'videopoker', 'craps'];
+    const games = ['blackjack', 'slots', 'roulette', 'baccarat', 'videopoker', 'craps', 'mines'];
     return panelEmbed({
         icon: ICON.crown(), title: L('C4SINO'), tagline: '全ゲームの概要', footer: 'C4sino · 全ゲームの概要',
         sections: [

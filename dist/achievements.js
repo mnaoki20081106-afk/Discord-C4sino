@@ -8,6 +8,7 @@ const GAME_LABEL = {
     baccarat: 'Baccarat',
     videopoker: 'Video Poker',
     craps: 'Craps',
+    mines: 'Mines',
 };
 const GAME_EMOJI = {
     blackjack: '🂡',
@@ -16,6 +17,7 @@ const GAME_EMOJI = {
     baccarat: '🎴',
     videopoker: '🃏',
     craps: '🎲',
+    mines: '💣',
 };
 export function countAchievements(guildId) {
     return db.prepare('SELECT COUNT(*) c FROM achievements WHERE guild_id=?').get(guildId).c;
@@ -86,7 +88,8 @@ export async function announce(client, a) {
             : a.game === 'videopoker' ? (mult >= 500 ? 'JACKPOT' : mult >= 20 ? 'BIG WIN' : 'WIN')
                 : a.game === 'baccarat' ? (mult >= 8 ? 'BIG WIN' : 'WIN')
                     : a.game === 'craps' ? (mult >= 20 ? 'BIG WIN' : 'WIN')
-                        : (a.net >= a.bet * 4 ? 'BIG WIN' : 'WIN');
+                        : a.game === 'mines' ? (mult >= 100 ? 'JACKPOT' : mult >= 10 ? 'BIG WIN' : 'WIN')
+                            : (a.net >= a.bet * 4 ? 'BIG WIN' : 'WIN');
     const color = tier === 'JACKPOT' ? 0xffd93d : tier === 'BIG WIN' ? 0xf59e0b : 0x22c55e;
     const embed = new EmbedBuilder()
         .setColor(color)

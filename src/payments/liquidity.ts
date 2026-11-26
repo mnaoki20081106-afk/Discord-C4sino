@@ -20,7 +20,10 @@ export const MAX_GROSS_MULT: Record<GameMultKey, number> = {
 };
 
 /**
- * Craps 専用: アクティブなセッションの未決済最大 gross 合計を管理し、
+ * クラップスとマインスイーパー: 進行中のセッションが払う可能性のある額を session ID ごとに持ち、
+ * 他の人の上限計算から差し引く (同時に遊ばれても合計で運営の残高を超えないため)。
+ * Craps 専用だった名前のまま、マインスイーパーも同じ表を使う。
+ * 以下は元の説明: アクティブなセッションの未決済最大 gross 合計を管理し、
  * 合算で流動性を超えないよう検査する。
  */
 const crapsExposures = new Map<string, number>();

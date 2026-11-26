@@ -32,7 +32,7 @@ export function leetPanel() {
 /* ────────────── Per-game Play panels (mix bet 対応) ────────────── */
 const GAME_EMOJI = {
     blackjack: 'game_blackjack', slots: 'game_slots', roulette: 'game_roulette',
-    baccarat: 'game_baccarat', videopoker: 'game_videopoker', craps: 'game_craps',
+    baccarat: 'game_baccarat', videopoker: 'game_videopoker', craps: 'game_craps', mines: 'game_mines',
 };
 /** ボタン。登録済みのアプリ絵文字があれば付ける。 */
 function btn(customId, label, style, emojiName) {

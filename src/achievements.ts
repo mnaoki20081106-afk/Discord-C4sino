@@ -5,7 +5,7 @@ import { L } from './ui/leet.js';
 export interface AchievementRecord {
   guildId: string;
   discordId: string;
-  game: 'blackjack' | 'slots' | 'roulette' | 'baccarat' | 'videopoker' | 'craps';
+  game: 'blackjack' | 'slots' | 'roulette' | 'baccarat' | 'videopoker' | 'craps' | 'mines';
   bet: number;
   payout: number;
   net: number;
@@ -18,6 +18,7 @@ const GAME_LABEL: Record<string, string> = {
   baccarat:  'Baccarat',
   videopoker:'Video Poker',
   craps:     'Craps',
+  mines:     'Mines',
 };
 const GAME_EMOJI: Record<string, string> = {
   blackjack: '🂡',
@@ -26,6 +27,7 @@ const GAME_EMOJI: Record<string, string> = {
   baccarat:  '🎴',
   videopoker:'🃏',
   craps:     '🎲',
+  mines:     '💣',
 };
 
 export function countAchievements(guildId: string): number {
@@ -102,6 +104,7 @@ export async function announce(client: Client, a: AchievementRecord): Promise<vo
   : a.game === 'videopoker'? (mult >= 500  ? 'JACKPOT' : mult >= 20 ? 'BIG WIN' : 'WIN')
   : a.game === 'baccarat'  ? (mult >= 8    ? 'BIG WIN' : 'WIN')
   : a.game === 'craps'     ? (mult >= 20   ? 'BIG WIN' : 'WIN')
+  : a.game === 'mines'     ? (mult >= 100  ? 'JACKPOT' : mult >= 10 ? 'BIG WIN' : 'WIN')
   :                          (a.net >= a.bet * 4 ? 'BIG WIN' : 'WIN');
   const color = tier === 'JACKPOT' ? 0xffd93d : tier === 'BIG WIN' ? 0xf59e0b : 0x22c55e;
 

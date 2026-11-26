@@ -2,12 +2,13 @@ import { randomUUID } from 'node:crypto';
 import type { BJState } from './blackjack.js';
 import type { VPHand }  from './videopoker.js';
 import type { CrapsState } from './craps.js';
+import type { MinesState } from './mines.js';
 import { db } from '../db/schema.js';
 
-type AnyState = BJState | VPHand | CrapsState | { kind: 'slots'; bet: number };
+type AnyState = BJState | VPHand | CrapsState | MinesState | { kind: 'slots'; bet: number };
 
 export interface BetMix { pp: number; ltc: number }
-interface Entry { id: string; discordId: string; game: 'blackjack'|'slots'|'videopoker'|'craps'; state: AnyState; bet: number; mix?: BetMix; test?: boolean; }
+interface Entry { id: string; discordId: string; game: 'blackjack'|'slots'|'videopoker'|'craps'|'mines'; state: AnyState; bet: number; mix?: BetMix; test?: boolean; }
 
 // mix 列を sessions テーブルに追加 (既存 DB の in-place migration)
 try { db.exec(`ALTER TABLE sessions ADD COLUMN mix TEXT`); } catch { /* exists */ }
