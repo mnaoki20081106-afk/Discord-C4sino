@@ -303,3 +303,14 @@ export function mwsWarningEmbed(bucket, expiresAt) {
         color: expired || bucket === 1 ? COLOR.black : COLOR.violet, footer: 'C4sino · 管理通知', bullet: ADM.bullet(), deco: '',
     });
 }
+/** 運営の LTC アドレスに届いたが、どの入金申請とも量が合わなかった送金 */
+export function ltcUnmatchedEmbed(address, txid, valueSat) {
+    return panelEmbed({
+        icon: ADM.wallet(), title: '照合できない LTC 入金', tagline: '自動では残高に反映していません', color: COLOR.black,
+        bullet: ADM.bullet(), deco: '', footer: 'C4sino · 管理通知',
+        sections: [
+            { icon: ADM.badge(), title: '届いた送金', lines: [`量: \`${(valueSat / 1e8).toFixed(8)}\` LTC`, `送金番号: \`${txid}\``, `送金先: \`${address}\``] },
+            { icon: ADM.user(), title: 'やること', lines: ['送った本人に確認して、ユーザー管理から chip を付与する', '量がずれたか、期限を過ぎてから送られた可能性があります'] },
+        ],
+    });
+}

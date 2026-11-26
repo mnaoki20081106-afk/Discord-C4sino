@@ -32,6 +32,27 @@ CREATE TABLE IF NOT EXISTS deposits (
 CREATE INDEX IF NOT EXISTS idx_deposits_user ON deposits(discord_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_deposits_txref ON deposits(tx_ref) WHERE tx_ref IS NOT NULL;
 
+-- LTC 入金の申請。運営アドレス 1 つで受け取り、末尾に足した端数 (amount_sat) で誰の入金か見分ける
+CREATE TABLE IF NOT EXISTS ltc_deposit_requests (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  discord_id TEXT    NOT NULL,
+  address    TEXT    NOT NULL,            -- 送金先 (運営の LTC ウォレット)
+  amount_sat INTEGER NOT NULL,            -- 送ってもらう正確な量 (1 LTC = 1e8)
+  jpy        INTEGER NOT NULL,            -- 反映する金額 (申請時のレートで決めた円)
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  status     TEXT    NOT NULL DEFAULT 'pending',   -- pending / credited / replaced
+  txid       TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_ltc_req_match ON ltc_deposit_requests(address, amount_sat, status);
+-- 運営アドレスに届いたが、どの申請とも金額が合わなかった送金 (通知を 1 回にするための記録)
+CREATE TABLE IF NOT EXISTS ltc_unmatched (
+  txid       TEXT PRIMARY KEY,
+  address    TEXT NOT NULL,
+  amount_sat INTEGER NOT NULL,
+  seen_at    INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+);
+
 CREATE TABLE IF NOT EXISTS ltc_addresses (
   discord_id TEXT PRIMARY KEY,
   address    TEXT NOT NULL UNIQUE,

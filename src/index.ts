@@ -9,7 +9,7 @@ import {
 import {
   adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal,
   panelLabel, isAdminPanelKey, isLegacyPanelKey, type InstalledPanel, type WalletRow, type UserSummary, type Notice,
-  mwsResetScreen, mwsWarningEmbed,
+  mwsResetScreen, mwsWarningEmbed, ltcUnmatchedEmbed,
 } from './ui/admin-panel.js';
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
 import * as sessions from './games/session-store.js';
@@ -21,7 +21,9 @@ import { depositPanel, depositMethodPicker, withdrawMethodPicker, balanceReply, 
 import * as mws from './mws/timer.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
-import { getOrCreateAddress, checkDeposits, ltcJpyRate } from './payments/ltc.js';
+import { checkDeposits, ltcJpyRate, incomingTxs } from './payments/ltc.js';
+import * as ltcMatch from './payments/ltc-match.js';
+import { COLOR, ICON, panelEmbed } from './ui/theme.js';
 import { invalidateLiquidityCache, maxAffordableBet, assertOperatorWithdrawSafe } from './payments/liquidity.js';
 import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY } from './payments/limits.js';
 import * as withdraw from './payments/withdraw.js';
@@ -1288,7 +1290,7 @@ async function onSelect(i: StringSelectMenuInteraction) {
 /** 運営の受け取りウォレットが無い入金方法は、入力画面を開かずに知らせる */
 const depositUnavailable = (i: ButtonInteraction | StringSelectMenuInteraction | ChatInputCommandInteraction, method: string) =>
   i.reply({ content: `${method} の入金は今は使えません (運営の受け取りウォレットが未登録)。`, flags: MessageFlags.Ephemeral });
-const hasLtcWallet = () => wallets.listWallets('ltc').some(w => w.enabled);
+const hasLtcWallet = () => operatorLtcAddress() !== null;
 
 async function openPaypayDepositModal(i: ButtonInteraction | StringSelectMenuInteraction | ChatInputCommandInteraction, ctx = '') {
   if (!wallets.pickPaypayWallet()) return depositUnavailable(i, 'PayPay');
@@ -1308,8 +1310,8 @@ async function showLtcAddress(i: ButtonInteraction | StringSelectMenuInteraction
   const modal = new ModalBuilder().setCustomId(`dep:ltc${ctx ? `:${ctx}` : ''}`).setTitle('LTC 入金')
     .addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder().setCustomId('jpy').setLabel('入金したい金額 (JPY) — 空欄で見積なし')
-          .setStyle(TextInputStyle.Short).setPlaceholder('例: 5000').setRequired(false)
+        new TextInputBuilder().setCustomId('jpy').setLabel('入金する金額 (円)')
+          .setStyle(TextInputStyle.Short).setPlaceholder('例: 5000').setRequired(true)
       ),
     );
   await i.showModal(modal);
@@ -1319,53 +1321,50 @@ async function replyLtcQuote(i: ModalSubmitInteraction | ButtonInteraction | Cha
   const inPlace = !!ctx && i.isModalSubmit() && i.isFromMessage();
   if (inPlace && i.isModalSubmit() && i.isFromMessage()) await i.deferUpdate();
   else await i.deferReply({ flags: MessageFlags.Ephemeral });
-  const replayNote = '着金は 1 承認後に自動で残高へ反映され、DM でお知らせします。着金後に Replay でゲームに戻れます。';
   const rows = ctx ? [replayRowFromCtx(ctx)] : [];
   const fail = (msg: string) => i.editReply({ content: msg, embeds: [], components: rows });
-  const show = (embed: EmbedBuilder) => {
-    if (ctx) embed.setDescription(`${embed.data.description ? `${embed.data.description}\n\n` : ''}${replayNote}`);
-    return i.editReply({ content: '', embeds: [embed], components: rows });
-  };
-  if (!hasLtcWallet()) return fail('LTC の入金は今は使えません (運営の受け取りウォレットが未登録)。');
-  const addr = await getOrCreateAddress(i.user.id);
+
+  const address = operatorLtcAddress();
+  if (!address) return fail('LTC の入金は今は使えません (運営の受け取りウォレットが未登録)。');
+  if (jpy === null || !Number.isFinite(jpy) || jpy <= 0) return fail('入金する金額 (円) を入力してください');
+  if (jpy < MIN_DEPOSIT_JPY.ltc)                return fail(`LTC の最低入金額は ¥${MIN_DEPOSIT_JPY.ltc.toLocaleString()} です`);
+  if (jpy > 10_000_000)                         return fail('金額が大きすぎます');
   const rate = await ltcJpyRate().catch(() => null);
+  if (!rate)                                    return fail('LTC のレートを取得できませんでした。しばらくしてからやり直してください。');
 
-  // JPY 未指定: アドレス + 現在レートのみ返す
-  if (jpy === null) {
-    const embed = new EmbedBuilder()
-      .setTitle('💠 LTC 入金')
-      .setDescription('下記アドレスに LTC を送金してください。**1承認で自動チャージ**されます。')
-      .setColor(0x345d9d)
-      .addFields(
-        { name: 'Address', value: `\`${addr}\`` },
-        { name: L('Rate'), value: rate ? `1 LTC ≈ ¥${rate.toLocaleString()}` : '⚠️ レート取得失敗' },
-      );
-    return show(embed);
-  }
+  let req;
+  try { req = ltcMatch.createRequest(i.user.id, address, jpy, rate); }
+  catch (e) { return fail((e as Error).message); }
+  const ltc = ltcMatch.satToLtc(req.amount_sat);
+  const uri = `litecoin:${address}?amount=${ltc}`;
 
-  if (!Number.isFinite(jpy) || jpy <= 0)       return fail('❌ 金額が不正');
-  if (jpy < MIN_DEPOSIT_JPY.ltc)                return fail(`❌ LTC の最低入金額は ¥${MIN_DEPOSIT_JPY.ltc.toLocaleString()} です`);
-  if (jpy > 10_000_000)                         return fail('❌ 金額が大きすぎます');
-  if (!rate)                                    return fail('⚠️ レート取得失敗。しばらく経って再度お試しください。');
+  const block = (t: string) => '```\n' + t + '\n```';
+  const embed = panelEmbed({
+    icon: ICON.ltc(), title: 'LTC 入金', tagline: '下の量をぴったり送ってください', color: COLOR.violet, deco: '',
+    sections: [{ icon: ICON.crown(), title: '注意', lines: [
+      '1 桁でもずれると自動で反映できません。末尾の数字が、あなたの入金の目印です',
+      '取引所から送るときは、手数料が引かれたあとの受け取り量がこの量になるように送ってください',
+      `<t:${req.expires_at}:R> までに送ってください。期限を過ぎてから届いたものは自動では反映されません`,
+      `届いてから 3 承認 (約 8 分) で ¥${jpy.toLocaleString()} が残高に入り、DM でお知らせします`,
+      '新しく申請すると、前の申請の量は使えなくなります',
+    ] }],
+    footer: `1 LTC ≈ ¥${rate.toLocaleString()}`,
+  });
+  // 見出しのすぐ下に、コピーしやすいようコードブロックで送金先と量を入れる
+  const [head, ...rest] = embed.data.description!.split('\n\n');
+  embed.setDescription([
+    head,
+    `### ${ICON.wallet()} 送金先\n${block(address)}`,
+    `### ${ICON.ltc()} 送る量 (¥${jpy.toLocaleString()} 分)\n${block(ltc)}`,
+    ...rest,
+    `-# 送金アプリ用のリンク\n${block(uri)}`,
+  ].join('\n\n'));
+  return i.editReply({ content: '', embeds: [embed], components: rows });
+}
 
-  const ltc   = +(jpy / rate).toFixed(8);
-  const fee   = 0.0001;
-  const total = +(ltc + fee).toFixed(8);
-  const uri   = `litecoin:${addr}?amount=${ltc}&label=${encodeURIComponent('C4sino deposit')}`;
-
-  const embed = new EmbedBuilder()
-    .setTitle(`💠 LTC 入金 — ¥${jpy.toLocaleString()} 相当`)
-    .setColor(0x345d9d)
-    .addFields(
-      { name: 'Address',       value: `\`${addr}\``, inline: false },
-      { name: 'Send (LTC)',    value: `\`${ltc}\` LTC`, inline: true },
-      { name: 'Est. fee',      value: `~\`${fee.toFixed(8)}\` LTC`, inline: true },
-      { name: 'Total send',    value: `~\`${total}\` LTC`, inline: true },
-      { name: L('Rate'),       value: `1 LTC ≈ ¥${rate.toLocaleString()}`, inline: false },
-      { name: 'Payment URI',   value: `\`\`\`\n${uri}\n\`\`\``, inline: false },
-    )
-    .setFooter({ text: 'ネットワーク手数料で差分が出ます。実際に着金した金額でチャージされます。' });
-  await show(embed);
+/** 運営の LTC 受け取りアドレス (有効なウォレットのうち、最初に登録したもの) */
+function operatorLtcAddress(): string | null {
+  return wallets.listWallets('ltc').filter(w => w.enabled).sort((a, b) => a.id - b.id)[0]?.address ?? null;
 }
 
 async function processPaypayDeposit(discordId: string, linkInput: string, passcode: string | undefined): Promise<{ amount: number; wallet: string }> {
@@ -1560,6 +1559,8 @@ client.on(Events.InteractionCreate, async (i) => {
 
 async function ltcPoll() {
   if (!process.env.LTC_API_TOKEN) return;
+  await pollOperatorLtc().catch(e => console.error('[ltc-poll] operator:', (e as Error).message));
+  // 以前の仕組み (ユーザーごとのアドレス) に送られた分も、引き続き反映する
   const rows = db.prepare('SELECT discord_id, address FROM ltc_addresses').all() as { discord_id: string; address: string }[];
   const rate = await ltcJpyRate().catch(() => null);
   if (!rate) return;
@@ -1592,6 +1593,50 @@ async function ltcPoll() {
   }
 }
 setInterval(ltcPoll, 60_000);
+
+/** 運営の LTC アドレスに届いた送金を、申請した量と照らし合わせて残高に反映する */
+async function pollOperatorLtc() {
+  const addresses = [...new Set(wallets.listWallets('ltc').filter(w => w.enabled).map(w => w.address).filter(Boolean))] as string[];
+  for (const address of addresses) {
+    const since = ltcMatch.firstRequestAt(address);
+    if (since === null) continue;                       // まだ申請が無いアドレスは見ない
+    const txs = await incomingTxs(address);
+    for (const tx of txs) {
+      if (tx.receivedAt < since - 120) continue;        // 申請を受け付ける前からの送金は対象外
+      if (db.prepare('SELECT 1 FROM deposits WHERE tx_ref=?').get(tx.txid)) continue;
+      if (db.prepare('SELECT 1 FROM ltc_unmatched WHERE txid=?').get(tx.txid)) continue;
+      const req = ltcMatch.findRequest(address, tx.valueSat, tx.receivedAt);
+      if (!req) {
+        db.prepare('INSERT OR IGNORE INTO ltc_unmatched(txid, address, amount_sat) VALUES (?,?,?)').run(tx.txid, address, tx.valueSat);
+        await notifyServerPanels(ltcUnmatchedEmbed(address, tx.txid, tx.valueSat));
+        continue;
+      }
+      try {
+        db.transaction(() => {
+          db.prepare(`INSERT INTO deposits(discord_id, method, amount_jpy, amount_raw, tx_ref, status, confirmed_at)
+            VALUES (?, 'ltc', ?, ?, ?, 'confirmed', strftime('%s','now'))`)
+            .run(req.discord_id, req.jpy, String(tx.valueSat), tx.txid);
+          ltcMatch.markCredited(req.id, tx.txid);
+          creditRail(req.discord_id, 'ltc', req.jpy, 'deposit:ltc', tx.txid);
+        })();
+      } catch (e) {
+        console.error('[ltc-poll] credit failed:', tx.txid, (e as Error).message);
+        continue;
+      }
+      invalidateLiquidityCache();
+      const user = await client.users.fetch(req.discord_id).catch(() => null);
+      await user?.send(`LTC ${ltcMatch.satToLtc(tx.valueSat)} の着金を確認しました。¥${req.jpy.toLocaleString()} を残高に加えました。`).catch(() => {});
+    }
+  }
+}
+
+/** サーバー管理パネルを置いたチャンネルに知らせる */
+async function notifyServerPanels(embed: EmbedBuilder) {
+  for (const channelId of serverPanelChannels()) {
+    const ch = await client.channels.fetch(channelId).catch(() => null);
+    if (ch && 'send' in ch) await (ch as any).send({ embeds: [embed] }).catch(() => {});
+  }
+}
 
 /* ────────────── PayPay 定期残高同期 ────────────── */
 

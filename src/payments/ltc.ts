@@ -73,6 +73,29 @@ export async function checkDeposits(address: string): Promise<ConfirmedTx[]> {
   return confirmed;
 }
 
+/** 運営アドレスに届いた送金 (3 承認以上)。自分のアドレスから出した送金 (出金のおつり) は除く。 */
+export interface IncomingTx { txid: string; valueSat: number; receivedAt: number; }
+export async function incomingTxs(address: string): Promise<IncomingTx[]> {
+  const token = process.env.LTC_API_TOKEN;
+  const res = await fetch(`${API}/addrs/${address}/full?limit=50${token ? `&token=${token}` : ''}`);
+  if (!res.ok) throw new Error(`full ${res.status}`);
+  const j = await res.json() as { txs?: Array<{
+    hash: string; confirmations: number; received?: string;
+    inputs?: Array<{ addresses?: string[] }>;
+    outputs: Array<{ addresses?: string[]; value: number }>;
+  }> };
+  const out: IncomingTx[] = [];
+  for (const tx of j.txs ?? []) {
+    if (tx.confirmations < 3) continue;
+    if ((tx.inputs ?? []).some(x => x.addresses?.includes(address))) continue;
+    const valueSat = tx.outputs.filter(o => o.addresses?.includes(address)).reduce((a, o) => a + o.value, 0);
+    if (valueSat <= 0) continue;
+    const t = tx.received ? Math.floor(Date.parse(tx.received) / 1000) : NaN;
+    out.push({ txid: tx.hash, valueSat, receivedAt: Number.isFinite(t) ? t : Math.floor(Date.now() / 1000) });
+  }
+  return out;
+}
+
 // LTC/JPY レート (CoinGecko, 無認証)。sticky cache で CoinGecko 障害時も 1h は前回値を使う。
 let _rateCache: { at: number; rate: number } | null = null;
 const RATE_FRESH_MS = 5 * 60_000;      // 5 分以内: そのまま返す (API 叩かない)
