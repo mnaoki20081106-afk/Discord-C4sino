@@ -1,6 +1,7 @@
 import { Client, EmbedBuilder, GuildTextBasedChannel } from 'discord.js';
 import { db } from './db/schema.js';
 import { L } from './ui/leet.js';
+import { COLOR, GAME_ICON, ICON, e } from './ui/theme.js';
 
 export interface AchievementRecord {
   guildId: string;
@@ -9,6 +10,12 @@ export interface AchievementRecord {
   bet: number;
   payout: number;
   net: number;
+  /** 以下は当たり通知の表示だけに使う (記録には残さない) */
+  mix?: { pp: number; ltc: number };
+  /** 掛け方や役など */
+  detail?: string;
+  userName?: string;
+  avatarUrl?: string;
 }
 
 const GAME_LABEL: Record<string, string> = {
@@ -19,15 +26,6 @@ const GAME_LABEL: Record<string, string> = {
   videopoker:'Video Poker',
   craps:     'Craps',
   mines:     'Mines',
-};
-const GAME_EMOJI: Record<string, string> = {
-  blackjack: '🂡',
-  slots:     '🎰',
-  roulette:  '🎡',
-  baccarat:  '🎴',
-  videopoker:'🃏',
-  craps:     '🎲',
-  mines:     '💣',
 };
 
 export function countAchievements(guildId: string): number {
@@ -90,7 +88,8 @@ export function formatChannelName(baseName: string, count: number): string {
   return `${cleaned}ー実績${count}件`.replace(/\s+/g, '-');
 }
 
-// ───────── 実績通知 Embed を送る ─────────
+// ───────── 当たり通知を送る ─────────
+// 見た目はゲームの結果画面に合わせる。マインスイーパーは自分で降りた勝ちなので SMART MOVE! にする。
 export async function announce(client: Client, a: AchievementRecord): Promise<void> {
   const cfg = getConfig(a.guildId);
   if (!cfg.channelId) return;
@@ -106,21 +105,40 @@ export async function announce(client: Client, a: AchievementRecord): Promise<vo
   : a.game === 'craps'     ? (mult >= 20   ? 'BIG WIN' : 'WIN')
   : a.game === 'mines'     ? (mult >= 100  ? 'JACKPOT' : mult >= 10 ? 'BIG WIN' : 'WIN')
   :                          (a.net >= a.bet * 4 ? 'BIG WIN' : 'WIN');
-  const color = tier === 'JACKPOT' ? 0xffd93d : tier === 'BIG WIN' ? 0xf59e0b : 0x22c55e;
-
-  const embed = new EmbedBuilder()
-    .setColor(color)
-    .setTitle(`${GAME_EMOJI[a.game]}  ${L(tier)}  !!`)
-    .setDescription(`<@${a.discordId}> が **${L(GAME_LABEL[a.game])}** で当選`)
-    .addFields(
-      { name: L('BET'),    value: `${a.bet.toLocaleString()} ${L('chips')}`, inline: true },
-      { name: L('Payout'), value: `${a.payout.toLocaleString()} ${L('chips')}`, inline: true },
-      { name: '純利',       value: `+${a.net.toLocaleString()} ${L('chips')}`, inline: true },
-      ...(mult > 0 ? [{ name: 'Mult', value: `×${mult.toFixed(2)}`, inline: true }] : []),
-    )
-    .setTimestamp();
-
-  await (ch as any).send({ embeds: [embed] });
+  await (ch as any).send({ embeds: [winEmbed(a, tier, mult)] });
 
   if (cfg.baseName) scheduleRename(client, a.guildId, cfg.channelId, cfg.baseName);
+}
+
+const yen = (n: number) => `¥${n.toLocaleString()}`;
+
+/** 当たり通知の見た目 (テストしやすいよう送信と分けている) */
+export function winEmbed(a: AchievementRecord, tier: string, mult: number): EmbedBuilder {
+  const smart = a.game === 'mines';
+  const head = smart ? `${e('win_star', '✦')} ${L('SMART MOVE!')}` : `${e('win_trophy', '◆')} ${L('CONGRATS!')}`;
+  const badge = tier === 'JACKPOT' ? `${e('win_crown')} **${L('JACKPOT')}**` : tier === 'BIG WIN' ? `${ICON.fire()} **${L('BIG WIN')}**` : `**${L('WIN')}**`;
+  const msg = smart
+    ? `<@${a.discordId}> さん、見事な引き際！ 爆弾を避けきって CASH OUT`
+    : `<@${a.discordId}> さん、おめでとうございます！`;
+  const pp = a.mix?.pp ?? 0, ltc = a.mix?.ltc ?? 0;
+  const betLine = a.mix
+    ? [pp > 0 ? `${ICON.paypay()} PayPay ${yen(pp)}` : '', ltc > 0 ? `${ICON.ltc()} LTC ${yen(ltc)}` : ''].filter(Boolean).join('　')
+    : yen(a.bet);
+
+  const desc = [
+    `# ${head}`,
+    `${badge}　${msg}`,
+    [`### ${(GAME_ICON[a.game]?.() ?? '')} ${L(GAME_LABEL[a.game])}`, ...(a.detail ? [`${ICON.arrow()} ${a.detail}`] : [])].join('\n'),
+    [`### ${ICON.chip()} BET ${yen(a.bet)}`, betLine].join('\n'),
+    [`## +${yen(a.net)}`, `払戻 ${yen(a.payout)}${mult > 0 ? `  (×${(Math.floor(mult * 100 + 1e-6) / 100).toLocaleString()})` : ''}`].join('\n'),
+  ].join('\n\n');
+
+  const embed = new EmbedBuilder()
+    .setColor(tier === 'JACKPOT' ? COLOR.silver : tier === 'BIG WIN' ? COLOR.violet : COLOR.purple)
+    .setDescription(desc.slice(0, 4096))
+    .setFooter({ text: smart ? 'C4sino · Smart Move' : 'C4sino · Congrats' })
+    .setTimestamp();
+  if (a.userName) embed.setAuthor({ name: a.userName, iconURL: a.avatarUrl });
+  if (a.avatarUrl) embed.setThumbnail(a.avatarUrl);
+  return embed;
 }

@@ -25,7 +25,7 @@ import { newCraps, addBet, roll as crapsRoll, openExposure, type CrapsBetKind, t
 import { MINES_SIZES, newMines, parseOpt as minesOpt, optOf as minesOptOf, multiplier as minesMult, payoutOf as minesPayout, openCell, openedCount, safeCount, type MinesSize, type MinesState } from './games/mines.js';
 import {
   formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker,
-  crapsDiceLine, cardButtonEmoji, cardText,
+  crapsDiceLine, cardButtonEmoji, cardText, slotEmoji,
 } from './ui/format-games.js';
 import { bjActionsRow } from './ui/panels.js';
 import { housePayoutCap, clampPayout, setCrapsExposure, clearCrapsExposure } from './payments/liquidity.js';
@@ -431,13 +431,19 @@ async function capFor(test: boolean, crapsSid?: string): Promise<number> {
   return test ? Number.MAX_SAFE_INTEGER : housePayoutCap(crapsSid);
 }
 
-async function settled(i: TI, game: Game, bet: number, payout: number, test: boolean) {
+/** 勝ったら記録して当たり通知を出す。extra は通知の表示だけに使う (掛け方・PayPay / LTC の内訳)。 */
+async function settled(i: TI, game: Game, bet: number, payout: number, test: boolean, extra?: { mix?: BetMix; detail?: string }) {
   if (test || !i.guildId || !client) return;
   const net = payout - bet;
   if (net <= 0) return;
-  const rec = { guildId: i.guildId, discordId: i.user.id, game, bet, payout, net };
+  const member = i.member && 'displayAvatarURL' in i.member ? i.member : null;
+  const rec = {
+    guildId: i.guildId, discordId: i.user.id, game, bet, payout, net, ...extra,
+    userName: member?.displayName ?? i.user.displayName ?? i.user.username,
+    avatarUrl: (member ?? i.user).displayAvatarURL({ size: 256 }),
+  };
   ach.recordAchievement(rec);
-  await ach.announce(client, rec);
+  await ach.announce(client, rec).catch(e => console.error('[ach] announce failed:', (e as Error).message));
 }
 
 function credit(uid: string, amount: number, mix: BetMix | undefined, reason: string, ref?: string) {
@@ -640,7 +646,7 @@ async function playSlots(i: TI, r: Round) {
     await show(i, { game: 'slots', uid: r.uid, prefs: r.p, test: r.test, board, result: res?.text, color: res?.color, inRound: spinning });
     if (spinning) await new Promise(ok => setTimeout(ok, 650));
   }
-  await settled(i, 'slots', r.bet, payout, r.test);
+  await settled(i, 'slots', r.bet, payout, r.test, { mix: r.mix, detail: result.reels.map(slotEmoji).join(' ') });
 }
 
 /* ────────────── ROULETTE ────────────── */
@@ -663,7 +669,7 @@ async function playRoulette(i: TI, r: Round) {
   const board = formatRoulette({ resultNumber: result, spinning: false, betLabel, betAmount: r.bet, payoutMult: mult });
   const res = resultLine(r.bet, payout);
   await show(i, { game: 'roulette', uid: r.uid, prefs: r.p, test: r.test, board, result: res.text, color: res.color });
-  await settled(i, 'roulette', r.bet, payout, r.test);
+  await settled(i, 'roulette', r.bet, payout, r.test, { mix: r.mix, detail: `${betLabel} — ${result} が出た` });
 }
 
 /* ────────────── BACCARAT ────────────── */
@@ -680,7 +686,7 @@ async function playBaccarat(i: TI, r: Round) {
   });
   const res = resultLine(r.bet, payout);
   await show(i, { game: 'baccarat', uid: r.uid, prefs: r.p, test: r.test, board, result: res.text, color: res.color });
-  if (mult > 1) await settled(i, 'baccarat', r.bet, payout, r.test);
+  if (mult > 1) await settled(i, 'baccarat', r.bet, payout, r.test, { mix: r.mix, detail: `${BAC_SIDES.find(([s]) => s === side)?.[1] ?? side} に BET` });
 }
 
 /* ────────────── BLACKJACK ────────────── */
@@ -777,7 +783,10 @@ async function renderBlackjack(i: TI, sid: string, st: BJState) {
   if (done) {
     const res = resultLine(totalBet, st.payout ?? 0);
     await show(i, { game: 'blackjack', uid, prefs: p, test, board, result: res.text, color: res.color });
-    await settled(i, 'blackjack', totalBet, st.payout ?? 0, test);
+    const bjLabel: Record<string, string> = { bj: 'BLACKJACK', win: 'WIN', push: 'PUSH', lose: 'LOSE' };
+    await settled(i, 'blackjack', totalBet, st.payout ?? 0, test, {
+      mix: entry.mix, detail: (st.results ?? []).map(x => bjLabel[x] ?? x).join(' / ') + (st.player.length > 1 ? ` (${st.player.length} ハンド)` : ''),
+    });
     return;
   }
   await show(i, {
@@ -853,7 +862,7 @@ async function renderVideoPoker(i: TI, sid: string, st: VPHand) {
     sessions.drop(sid);
     const res = resultLine(entry.bet, payout);
     await show(i, { game: 'videopoker', uid, prefs: p, test, board, result: `${rankLabel ? `**${rankLabel}**  ` : ''}${res.text}`, color: res.color });
-    await settled(i, 'videopoker', entry.bet, payout, test);
+    await settled(i, 'videopoker', entry.bet, payout, test, { mix: entry.mix, detail: rankLabel });
     return;
   }
   sessions.save(sid);
@@ -971,7 +980,7 @@ async function renderMines(i: TI, sid: string, notice?: string) {
     const res = resultLine(entry.bet, payout);
     const what = st.phase === 'bust' ? `**${MN.bomb()} 爆弾**` : `**CASH OUT ×${minesMult(st.size, st.mines, k)}**`;
     await show(i, { game: 'mines', uid, prefs: p, test, board: `${minesGrid(st)}\n${head}`, result: `${what}  ${res.text}`, color: res.color });
-    await settled(i, 'mines', entry.bet, payout, test);
+    await settled(i, 'mines', entry.bet, payout, test, { mix: entry.mix, detail: `${st.size}×${st.size}・爆弾 ${st.mines} 個 — 宝石 ${k} 個で CASH OUT ×${minesMult(st.size, st.mines, k)}` });
     return;
   }
 
@@ -1162,7 +1171,11 @@ export async function onCrapsAction(i: ButtonInteraction, action: 'roll' | 'undo
 
     const wager = report.resolutions.reduce((s, r) => s + (r.stay ? 0 : r.bet.amount), 0);
     await show(i, crapsView(uid, sid!, st));
-    await settled(i, 'craps', wager, total, test);
+    const settledBets = report.resolutions.filter(r => !r.stay);
+    const crapsMix = settledBets.every(r => r.bet.mix)
+      ? settledBets.reduce((m, r) => ({ pp: m.pp + r.bet.mix!.pp, ltc: m.ltc + r.bet.mix!.ltc }), { pp: 0, ltc: 0 }) : undefined;
+    const wonKinds = [...new Set(report.resolutions.filter(r => r.payout > 0).map(r => CRAPS_KINDS.find(([k]) => k === r.bet.kind)?.[1].split(' (')[0] ?? r.bet.kind))];
+    await settled(i, 'craps', wager, total, test, { mix: crapsMix, detail: `${report.d1 + report.d2} が出た — ${wonKinds.join(' / ')}` });
   } finally {
     busy.delete(k);
   }

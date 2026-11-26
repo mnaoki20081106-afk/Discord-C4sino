@@ -110,6 +110,9 @@ export const EMOJI_IDS = {
     "game_blackjack": "1575511991706067097",
     "game_craps": "1575513326455357551",
     "game_mines": "1575558495997268048",
+    "win_crown": "1575577315872743597",
+    "win_star": "1575577320050270421",
+    "win_trophy": "1575577324752085032",
     "rule_ban": "1575565913187684362",
     "rule_book": "1575565917675454465",
     "rule_check": "1575565922347909191",
@@ -156,7 +159,7 @@ export const EMOJI_IDS = {
     "adm_wallet": "1575528682376659004"
 };
 /** 動く (GIF) 絵文字。Discord では `<a:name:id>` と書かないと動かない。 */
-export const ANIMATED = new Set(["deco_fire", "game_slots", "pay_ltc", "pay_paypay"]);
+export const ANIMATED = new Set(["deco_fire", "game_slots", "pay_ltc", "pay_paypay", "win_crown", "win_star"]);
 /** Discord 絵文字タグを返す (動く絵文字は `<a:name:id>`)。存在しない name は空文字。 */
 export function emoji(name) {
     const id = EMOJI_IDS[name];
