@@ -16,7 +16,7 @@ import {
 import { db, getBalance, txCredit, ensureUser, assertNotBanned, getReserves, applyMix, payoutByMix } from './db/schema.js';
 import * as sessions from './games/session-store.js';
 import type { BetMix } from './games/session-store.js';
-import { startHand, availableActions, apply, newShoe, isBlackjack, handTotal, type BJState } from './games/blackjack.js';
+import { startHand, availableActions, apply, newShoe, isBlackjack, type BJState } from './games/blackjack.js';
 import { spinWithCap, reelStrip } from './games/slots.js';
 import { spinRouletteWithCap, payoutMult as rouPayout, type BetKind as RouKind } from './games/roulette.js';
 import { dealBaccaratWithCap, payoutMult as bacPayout, type Side as BacSide } from './games/baccarat.js';
@@ -260,7 +260,7 @@ function optText(game: Game, p: Prefs): Field | null {
   return null;
 }
 
-function optionsRow(game: Game, p: Prefs, disabled: boolean): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder> | null {
+function optionsRow(game: Game, p: Prefs, disabled: boolean, sid?: string): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder> | null {
   if (game === 'baccarat') {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(
       BAC_SIDES.map(([side, label]) => new ButtonBuilder()
@@ -280,7 +280,7 @@ function optionsRow(game: Game, p: Prefs, disabled: boolean): ActionRowBuilder<B
   }
   if (game === 'craps') {
     return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-      new StringSelectMenuBuilder().setCustomId('cr:add').setPlaceholder('賭けの種類を選ぶと、今の BET 額で台に置きます').setDisabled(disabled)
+      new StringSelectMenuBuilder().setCustomId(sid ? `cr:add:${sid}` : 'cr:add').setPlaceholder('賭けの種類を選ぶと、今の BET 額で台に置きます').setDisabled(disabled)
         .addOptions(CRAPS_KINDS.map(([v, l]) => new StringSelectMenuOptionBuilder().setValue(v).setLabel(l.slice(0, 100)))),
     );
   }
@@ -312,7 +312,7 @@ function renderTable(v: View) {
   if (v.board) desc.push(v.board);
   if (v.result) desc.push(v.result);
   if (v.notice) desc.push(`**注意**  ${v.notice}`);
-  if (!v.board && !v.result) desc.push(v.game === 'craps' ? '_賭けの種類を選んで台に置き、ROLL で振ります_' : '_BET を押すとゲームが始まります_');
+  if (!v.board && !v.result && !v.notice) desc.push(v.game === 'craps' ? '_賭けの種類を選んで台に置き、ROLL で振ります_' : '_BET を押すとゲームが始まります_');
 
   const opt = optText(v.game, v.prefs);
   const embed = new EmbedBuilder()
@@ -324,10 +324,9 @@ function renderTable(v: View) {
       ...(opt ? [opt] : []),
       { name: '残高', value: `PP ¥${r.pp.toLocaleString()} / LTC ¥${r.ltc.toLocaleString()}`, inline: true },
     );
-  if (v.sid) embed.setFooter({ text: `sid=${v.sid}` });
 
   const rows: ActionRowBuilder<any>[] = [];
-  const o = optionsRow(v.game, v.prefs, !!v.inRound && v.game !== 'craps');
+  const o = optionsRow(v.game, v.prefs, !!v.inRound && v.game !== 'craps', v.sid);
   if (o) rows.push(o);
   if (v.actions) rows.push(...v.actions);
   rows.push(betBarRow(v.game, v.prefs, !!v.inRound));
@@ -377,15 +376,29 @@ async function refresh(i: TI, game: Game, notice?: string) {
     if (entry && entry.discordId === i.user.id) return show(i, crapsView(i.user.id, sid!, entry.state as CrapsState, notice));
     return openCrapsTable(i, notice);
   }
-  const last = lastShown.get(key(i.user.id, game));
+  const last = notice ? undefined : lastShown.get(key(i.user.id, game));
   return show(i, { game, uid: i.user.id, prefs: getPrefs(i.user.id, game), ...last, notice });
 }
 
+const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/;
+
+/**
+ * 進行中のセッション ID。押されたボタン/メニューの customId に入れてある。
+ * 金額変更など ID を持たない操作では、同じ画面の他のボタンから探す。
+ * (以前の画面はフッターに sid=… を出していたので、それも読む)
+ */
 function sidOf(i: TI): string | null {
+  const own = i.customId.match(UUID);
+  if (own) return own[0];
   const msg = 'message' in i ? i.message : null;
+  for (const row of (msg?.components ?? []) as any[]) {
+    for (const c of row.components ?? []) {
+      const m = String(c.customId ?? c.custom_id ?? '').match(UUID);
+      if (m) return m[0];
+    }
+  }
   const footer = msg?.embeds?.[0]?.footer?.text;
-  const m = footer?.match(/sid=([0-9a-f-]+)/);
-  return m?.[1] ?? null;
+  return footer?.match(/sid=([0-9a-f-]+)/)?.[1] ?? null;
 }
 
 /** 払戻し上限。テストでは運営残高による上限をかけない。 */
@@ -467,7 +480,7 @@ export async function onTableSelect(i: StringSelectMenuInteraction) {
     savePrefs(i.user.id, 'roulette', { ...p, opt: v });
     return refresh(i, 'roulette');
   }
-  if (i.customId === 'cr:add') return onCrapsAdd(i, v as CrapsBetKind);
+  if (i.customId.startsWith('cr:add')) return onCrapsAdd(i, v as CrapsBetKind);
 }
 
 /** テーブルから開いた入力画面の送信 */
@@ -719,30 +732,26 @@ async function renderBlackjack(i: TI, sid: string, st: BJState) {
     player: st.player, active: st.active, dealer: st.dealer, hideHole: st.phase === 'player',
     bets: st.bets, balance: getBalance(uid), phase: st.phase, results: st.results, payout: st.payout,
   });
-  const fields: Field[] = [
-    { name: L('Dealer'), value: st.phase === 'player' ? `**?** + ${handTotal([st.dealer[0]]).total}` : `**${handTotal(st.dealer).total}**`, inline: true },
-    { name: L('Player'), value: st.player.map(h => `**${handTotal(h).total}**`).join(' / '), inline: true },
-  ];
   if (done) {
     const res = resultLine(totalBet, st.payout ?? 0);
-    await show(i, { game: 'blackjack', uid, prefs: p, test, board, result: res.text, color: res.color, fields });
+    await show(i, { game: 'blackjack', uid, prefs: p, test, board, result: res.text, color: res.color });
     await settled(i, 'blackjack', totalBet, st.payout ?? 0, test);
     return;
   }
   await show(i, {
-    game: 'blackjack', uid, prefs: p, test, board, fields, sid, inRound: true,
+    game: 'blackjack', uid, prefs: p, test, board, sid, inRound: true,
     result: `あなたの番 — hand ${st.active + 1}/${st.player.length}`,
-    actions: [bjActionsRow(availableActions(st))],
+    actions: [bjActionsRow(availableActions(st), sid)],
   });
 }
 
 /* ────────────── VIDEO POKER ────────────── */
 
-function vpHoldButtons(st: VPHand): ActionRowBuilder<ButtonBuilder> {
+function vpHoldButtons(st: VPHand, sid: string): ActionRowBuilder<ButtonBuilder> {
   const row = new ActionRowBuilder<ButtonBuilder>();
   st.cards.forEach((c, idx) => {
     const state = st.held[idx] ? 'HELD' : 'HOLD';
-    const btn = new ButtonBuilder().setCustomId(`vp:hold:${idx}`)
+    const btn = new ButtonBuilder().setCustomId(`vp:hold:${idx}:${sid}`)
       .setStyle(st.held[idx] ? ButtonStyle.Primary : ButtonStyle.Secondary);
     const e = cardButtonEmoji(c);
     if (e) btn.setEmoji(e).setLabel(state);
@@ -809,9 +818,9 @@ async function renderVideoPoker(i: TI, sid: string, st: VPHand) {
   await show(i, {
     game: 'videopoker', uid, prefs: p, test, board, sid, inRound: true,
     result: '残すカードを HOLD して DRAW',
-    actions: [vpHoldButtons(st)],
+    actions: [vpHoldButtons(st, sid)],
     primary: new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId('vp:draw').setLabel('DRAW').setStyle(ButtonStyle.Primary)),
+      new ButtonBuilder().setCustomId(`vp:draw:${sid}`).setLabel('DRAW').setStyle(ButtonStyle.Primary)),
   });
 }
 
@@ -838,9 +847,9 @@ function crapsView(uid: string, sid: string, st: CrapsState, notice?: string): V
       { name: 'この台の累計', value: `${signedYen(net)} (賭 ¥${st.totalWagered.toLocaleString()} / 戻 ¥${st.totalReturned.toLocaleString()})` },
     ],
     primary: new ActionRowBuilder<ButtonBuilder>().addComponents(
-      withEmoji(new ButtonBuilder().setCustomId('cr:roll').setLabel('ROLL').setStyle(ButtonStyle.Primary).setDisabled(st.bets.length === 0), 'game_craps'),
-      new ButtonBuilder().setCustomId('cr:undo').setLabel('直前のベット取消').setStyle(ButtonStyle.Secondary).setDisabled(st.bets.length === 0),
-      new ButtonBuilder().setCustomId('cr:end').setLabel('END').setStyle(ButtonStyle.Secondary),
+      withEmoji(new ButtonBuilder().setCustomId(`cr:roll:${sid}`).setLabel('ROLL').setStyle(ButtonStyle.Primary).setDisabled(st.bets.length === 0), 'game_craps'),
+      new ButtonBuilder().setCustomId(`cr:undo:${sid}`).setLabel('直前のベット取消').setStyle(ButtonStyle.Secondary).setDisabled(st.bets.length === 0),
+      new ButtonBuilder().setCustomId(`cr:end:${sid}`).setLabel('END').setStyle(ButtonStyle.Secondary),
     ),
   };
 }
@@ -859,7 +868,7 @@ async function onCrapsAdd(i: StringSelectMenuInteraction | ModalSubmitInteractio
   let p = getPrefs(uid, 'craps');
   if (p.test && !canTestPlay(i)) { p = { ...p, test: false }; savePrefs(uid, 'craps', p); }
   if (isUnset(p)) {
-    if (!i.isModalSubmit()) return i.showModal(betMixModal(i, `t:craps:amtadd:${kind}`, `${L('CRAPS')} — BET 金額`, p));
+    if (!i.isModalSubmit()) return i.showModal(betMixModal(i, `t:craps:amtadd:${kind}${sidOf(i) ? `:${sidOf(i)}` : ''}`, `${L('CRAPS')} — BET 金額`, p));
     return refresh(i, 'craps', 'BET 額を設定してください (金額変更)');
   }
   await ack(i);

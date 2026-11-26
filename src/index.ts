@@ -1103,7 +1103,7 @@ async function onWithdrawUserButton(i: ButtonInteraction, kind: string) {
 }
 
 async function onSelect(i: StringSelectMenuInteraction) {
-  if (i.customId.startsWith('t:') || i.customId === 'cr:add') return onTableSelect(i);
+  if (i.customId.startsWith('t:') || i.customId.startsWith('cr:add')) return onTableSelect(i);
   // 以前のルーレット画面に残っている掛け方メニュー: 新しいテーブルを開き直す
   if (i.customId === 'rou:select') return openTable(i as unknown as ButtonInteraction, 'roulette');
 }

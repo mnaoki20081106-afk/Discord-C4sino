@@ -110,7 +110,7 @@ export const EMOJI_IDS = {
   "game_baccarat": "1575511987390124104",
   "game_blackjack": "1575511991706067097",
   "game_craps": "1575513326455357551",
-  "game_roulette": "1575512000321290311",
+  "game_roulette": "1575517259550564363",
   "game_slots": "1575512004590960780",
   "game_videopoker": "1575512008508317739",
   "pay_ltc": "1575512013042614323",

@@ -76,7 +76,7 @@ export function withdrawMethodPicker() {
     const row = new ActionRowBuilder().addComponents(btn('wd:paypay', 'PayPay', ButtonStyle.Secondary, 'pay_paypay'), btn('wd:ltc', 'LTC', ButtonStyle.Secondary, 'pay_ltc'));
     return { content: `${ICON.chip()} 出金方法を選んでください`, components: [row] };
 }
-export function bjActionsRow(actions) {
+export function bjActionsRow(actions, sid) {
     const map = {
         hit: { label: L('HIT'), style: ButtonStyle.Primary },
         stand: { label: L('STAND'), style: ButtonStyle.Secondary },
@@ -86,7 +86,7 @@ export function bjActionsRow(actions) {
     const row = new ActionRowBuilder();
     for (const a of actions) {
         const m = map[a];
-        row.addComponents(new ButtonBuilder().setCustomId(`bj:act:${a}`).setLabel(m.label).setStyle(m.style));
+        row.addComponents(new ButtonBuilder().setCustomId(sid ? `bj:act:${a}:${sid}` : `bj:act:${a}`).setLabel(m.label).setStyle(m.style));
     }
     return row;
 }

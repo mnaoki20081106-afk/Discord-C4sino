@@ -117,7 +117,7 @@ export function withdrawMethodPicker() {
   return { content: `${ICON.chip()} 出金方法を選んでください`, components: [row] };
 }
 
-export function bjActionsRow(actions: string[]): ActionRowBuilder<ButtonBuilder> {
+export function bjActionsRow(actions: string[], sid?: string): ActionRowBuilder<ButtonBuilder> {
   const map: Record<string, { label: string; style: ButtonStyle }> = {
     hit:   { label: L('HIT'),    style: ButtonStyle.Primary },
     stand: { label: L('STAND'),  style: ButtonStyle.Secondary },
@@ -127,7 +127,7 @@ export function bjActionsRow(actions: string[]): ActionRowBuilder<ButtonBuilder>
   const row = new ActionRowBuilder<ButtonBuilder>();
   for (const a of actions) {
     const m = map[a];
-    row.addComponents(new ButtonBuilder().setCustomId(`bj:act:${a}`).setLabel(m.label).setStyle(m.style));
+    row.addComponents(new ButtonBuilder().setCustomId(sid ? `bj:act:${a}:${sid}` : `bj:act:${a}`).setLabel(m.label).setStyle(m.style));
   }
   return row;
 }

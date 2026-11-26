@@ -2,6 +2,7 @@
 // Application Emoji の ID は src/ui/emoji-ids.ts に (アップロード後に) 生成される。
 // 未アップロード時は emoji() が空文字を返すので、テキスト部分だけで表示が成立する。
 import { emoji, EMOJI_IDS } from './emoji-ids.js';
+import { handTotal } from '../games/blackjack.js';
 const SUIT_NAME = { S: 'spades', H: 'hearts', D: 'diamonds', C: 'clubs' };
 const RANK_NAME = (r) => {
     if (r === 'A')
@@ -47,7 +48,9 @@ export function formatBlackjack(i) {
     const dealerCards = i.hideHole && i.dealer.length >= 2
         ? [i.dealer[0], 'back', ...i.dealer.slice(2)]
         : i.dealer;
-    lines.push(`**Dealer**`);
+    // 合計点は見出しの横に出す (伏せ札があるときは表の札だけ)
+    const dealerTotal = i.hideHole && i.dealer.length >= 2 ? `? + ${handTotal([i.dealer[0]]).total}` : String(handTotal(i.dealer).total);
+    lines.push(`**Dealer**  ${dealerTotal}`);
     lines.push(big(row(dealerCards)));
     lines.push('');
     // Player (split 対応)
@@ -55,7 +58,9 @@ export function formatBlackjack(i) {
         const marker = i.player.length > 1
             ? (idx === i.active && i.phase === 'player' ? '▶ ' : '　')
             : '';
-        const label = i.player.length > 1 ? `**Hand ${idx + 1}** (bet ${i.bets[idx].toLocaleString()})` : `**You** (bet ${i.bets[idx].toLocaleString()})`;
+        const total = handTotal(hand).total;
+        // BET は下の欄に出すので 1 ハンドのときは書かない。スプリット時はハンドごとの BET が違いうるので書く
+        const label = i.player.length > 1 ? `**Hand ${idx + 1}**  ${total}  (bet ${i.bets[idx].toLocaleString()})` : `**You**  ${total}`;
         lines.push(`${marker}${label}`);
         lines.push(big(row(hand)));
         // 1 ハンドのときは共通の結果行だけで足りる。スプリット時だけ手ごとの勝敗を出す

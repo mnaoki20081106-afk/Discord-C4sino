@@ -1036,7 +1036,7 @@ async function onWithdrawUserButton(i, kind) {
         return openLtcWithdrawModal(i);
 }
 async function onSelect(i) {
-    if (i.customId.startsWith('t:') || i.customId === 'cr:add')
+    if (i.customId.startsWith('t:') || i.customId.startsWith('cr:add'))
         return onTableSelect(i);
     // 以前のルーレット画面に残っている掛け方メニュー: 新しいテーブルを開き直す
     if (i.customId === 'rou:select')
