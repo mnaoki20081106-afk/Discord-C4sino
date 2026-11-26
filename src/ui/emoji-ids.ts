@@ -1,5 +1,5 @@
 // Discord のアプリ絵文字 (bot に登録した絵文字) の名前と ID。
-// card_* / dice_* / rl_* / slot_* はカード等の自作画像、deco_* / game_* / pay_* / ui_* はパネル装飾用、gauge_* は残高ゲージ用。
+// card_* / dice_* / rl_* / slot_* はカード等の自作画像、deco_* / game_* / pay_* / ui_* はパネル装飾用、gauge_* は残高ゲージ用、adm_* は管理パネル用。
 
 export const EMOJI_IDS = {
   "card_back": "1574229074329473196",
@@ -133,7 +133,18 @@ export const EMOJI_IDS = {
   "gauge_mix_r": "1575521893480661002",
   "gauge_pp_l": "1575521895946915911",
   "gauge_pp_m": "1575521895472693401",
-  "gauge_pp_r": "1575521914636603484"
+  "gauge_pp_r": "1575521914636603484",
+  "adm_badge": "1575528662130884711",
+  "adm_ban": "1575528663657750619",
+  "adm_bullet": "1575528665310306479",
+  "adm_chart": "1575528667441012878",
+  "adm_check": "1575529188750790707",
+  "adm_leet": "1575528671241044129",
+  "adm_ng": "1575528672822300822",
+  "adm_panel": "1575528674285985926",
+  "adm_server": "1575528679264493709",
+  "adm_user": "1575528680770371735",
+  "adm_wallet": "1575528682376659004"
 } as const;
 
 export type EmojiName = keyof typeof EMOJI_IDS;

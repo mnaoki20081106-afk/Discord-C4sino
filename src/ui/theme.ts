@@ -63,14 +63,19 @@ export function panelEmbed(opts: {
   sections: Section[];
   color?: number;
   footer?: string;
+  /** 箇条書きの印。既定は紫の矢印 (管理画面はシルバーの菱形) */
+  bullet?: string;
+  /** ひとことの両脇の飾り。既定は炎、'' で飾りなし */
+  deco?: string;
 }): EmbedBuilder {
-  const fire = ICON.fire();
+  const deco = opts.deco ?? ICON.fire();
+  const mark = opts.bullet ?? ICON.arrow();
   const head = [
     `# ${opts.icon ? `${opts.icon} ` : ''}${opts.title}`,
-    fire ? `${fire} ${opts.tagline} ${fire}` : opts.tagline,
+    deco ? `${deco} ${opts.tagline} ${deco}` : opts.tagline,
   ];
   const body = opts.sections.map(s =>
-    [`### ${s.icon ?? ICON.crown()} ${s.title}`, ...s.lines.map(bullet)].join('\n'));
+    [`### ${s.icon ?? ICON.crown()} ${s.title}`, ...s.lines.map(line => `${mark} ${line}`)].join('\n'));
   const embed = new EmbedBuilder()
     .setColor(opts.color ?? COLOR.purple)
     .setDescription([head.join('\n'), ...body].join('\n\n').slice(0, 4096));
