@@ -81,6 +81,10 @@ export async function checkDeposits(address) {
     return confirmed;
 }
 export async function incomingTxs(address) {
+    return (await addressFull(address)).incoming;
+}
+/** アドレスの残高 (litoshi、少なめに見積もった値) と、届いた送金。1 回の問い合わせで両方取る。 */
+export async function addressFull(address) {
     const token = process.env.LTC_API_TOKEN;
     const res = await fetch(`${API}/addrs/${address}/full?limit=50${token ? `&token=${token}` : ''}`);
     if (!res.ok)
@@ -98,7 +102,11 @@ export async function incomingTxs(address) {
         const t = tx.received ? Math.floor(Date.parse(tx.received) / 1000) : NaN;
         out.push({ txid: tx.hash, valueSat, receivedAt: Number.isFinite(t) ? t : Math.floor(Date.now() / 1000) });
     }
-    return out;
+    if (typeof j.balance !== 'number')
+        throw new Error('balance がありません');
+    // 承認済みの残高と、未承認の出入りを含めた残高の小さい方 (送ったばかりの出金を残高に数えないため)
+    const balanceSat = Math.min(j.balance, typeof j.final_balance === 'number' ? j.final_balance : j.balance);
+    return { balanceSat, incoming: out };
 }
 // LTC/JPY レート (CoinGecko, 無認証)。sticky cache で CoinGecko 障害時も 1h は前回値を使う。
 let _rateCache = null;

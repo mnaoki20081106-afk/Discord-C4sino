@@ -156,13 +156,17 @@ export function confirmScreen(title, lines, yesId, noId) {
     const embed = screen(title, 'この操作は取り消せません', [{ icon: ADM.badge(), title: '実行する内容', lines }]);
     return { embeds: [embed], components: [row(btn(yesId, '実行する', ButtonStyle.Danger), btn(noId, 'キャンセル'))] };
 }
-export function walletScreen(rows, selectedId, notice) {
+export function walletScreen(rows, selectedId, notice, profit) {
     const pp = rows.filter(w => w.kind === 'paypay');
     const ltc = rows.filter(w => w.kind === 'ltc');
     const state = (w) => (w.enabled ? '有効' : '**無効**');
     const sections = [
         { icon: ICON.paypay(), title: `PayPay (${pp.length})`, lines: pp.length ? pp.map(w => `#${w.id} ${w.label} — ${state(w)} / ${w.access_token ? `残高 ¥${(w.balance_cached ?? 0).toLocaleString()} (前回の確認時)` : '未ログイン'}${w.display_name ? ` / ${w.display_name}` : ''}`) : ['_未登録_'] },
         { icon: ICON.ltc(), title: `LTC (${ltc.length})`, lines: ltc.length ? ltc.map(w => `#${w.id} ${w.label} — ${state(w)} / ${w.derivation ? '自動送金あり' : '受け取り専用'} / \`${w.address}\``) : ['_未登録_'] },
+        ...(profit ? [{ icon: ADM.chart(), title: '引き出せる利益', lines: [
+                    `今引き出せるのは **¥${profit.max.toLocaleString()}** まで`,
+                    `運営の残高 ¥${profit.total.toLocaleString()} − ユーザーの残高 ¥${profit.outstanding.toLocaleString()} − 進行中のゲームで確保 ¥${profit.reserved.toLocaleString()}`,
+                ] }] : []),
         { icon: ADM.bullet(), title: '使い方', lines: [
                 '登録: 「PayPay を登録」「LTC を登録」',
                 '切り替え・削除・残高確認: ウォレットを選んでから押す',

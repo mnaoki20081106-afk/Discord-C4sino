@@ -87,10 +87,13 @@ export async function totalLiquidityJpy(opts) {
 export async function assertOperatorWithdrawSafe(amountJpy, kind) {
     const liq = await cachedLiquidity();
     const outstanding = db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get().s;
-    const effectiveAfter = liq.total - outstanding - amountJpy;
+    // 進行中のゲーム (マインスイーパー・クラップス) が払う可能性のある額も、引き出せる額から除く
+    const reserved = totalCrapsExposure();
+    const effectiveAfter = liq.total - outstanding - reserved - amountJpy;
     if (effectiveAfter < 0) {
-        return `引き出すと ¥${(-effectiveAfter).toLocaleString()} 分、流通チップに対して不足します ` +
-            `(流動性 ¥${liq.total.toLocaleString()} − 流通チップ ¥${outstanding.toLocaleString()} − 引き出し ¥${amountJpy.toLocaleString()})`;
+        const max = Math.max(0, liq.total - outstanding - reserved);
+        return `今引き出せるのは ¥${max.toLocaleString()} までです ` +
+            `(運営の残高 ¥${liq.total.toLocaleString()} − ユーザーの残高 ¥${outstanding.toLocaleString()} − 進行中のゲームで確保 ¥${reserved.toLocaleString()})`;
     }
     // kind 別の個別チェックも: LTC だけ引き出して LTC 由来のチップが残らないようにする
     const reservesByRail = db.prepare(kind === 'paypay'
@@ -115,6 +118,13 @@ export async function cachedLiquidity() {
     return liq;
 }
 export function invalidateLiquidityCache() { _cache = null; }
+/** 運営が今引き出せる利益 (円)。運営の残高 − ユーザーの残高 − 進行中のゲームで確保した額。 */
+export async function operatorWithdrawable() {
+    const liq = await cachedLiquidity();
+    const outstanding = db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get().s;
+    const reserved = totalCrapsExposure();
+    return { max: Math.max(0, liq.total - outstanding - reserved), total: liq.total, outstanding, reserved };
+}
 /** ベット額 × 最大倍率 ≤ 流動性 を満たすか検査。失敗時は投げる。 */
 /**
  * 「ハウスが今この瞬間に払える gross 上限」。bet は既に台に乗っている想定で、

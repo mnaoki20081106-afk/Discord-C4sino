@@ -8,11 +8,11 @@ import { depositPanel, depositMethodPicker, withdrawMethodPicker, balanceReply, 
 import * as mws from './mws/timer.js';
 import * as pp from './payments/paypay-client.js';
 import * as wallets from './payments/wallets.js';
-import { checkDeposits, ltcJpyRate, incomingTxs } from './payments/ltc.js';
+import { checkDeposits, ltcJpyRate, addressFull } from './payments/ltc.js';
 import * as ltcMatch from './payments/ltc-match.js';
 import { COLOR, ICON, panelEmbed } from './ui/theme.js';
 import { rulesPanel, getRulesConfig, setRulesConfig } from './ui/rules.js';
-import { invalidateLiquidityCache, maxAffordableBet, assertOperatorWithdrawSafe } from './payments/liquidity.js';
+import { invalidateLiquidityCache, maxAffordableBet, assertOperatorWithdrawSafe, operatorWithdrawable } from './payments/liquidity.js';
 import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY } from './payments/limits.js';
 import * as withdraw from './payments/withdraw.js';
 import { L } from './ui/leet.js';
@@ -1000,7 +1000,7 @@ async function renderAdmin(i, screenName, notice) {
     const s = selOf(i.user.id);
     switch (screenName) {
         case 'games': return showAdmin(i, gamesScreen(gamePanels(gid), s, notice));
-        case 'wallet': return showAdmin(i, walletScreen(adminWallets(), s.walletId, notice));
+        case 'wallet': return showAdmin(i, walletScreen(adminWallets(), s.walletId, notice, await operatorWithdrawable()));
         case 'server': return showAdmin(i, serverHome(notice));
         case 'ng': return showAdmin(i, ngScreen(listBannedWords(gid).map(w => w.word), notice));
         case 'user': return showAdmin(i, userScreen(s.userId ? await userSummary(s.userId) : undefined, notice));
@@ -1588,9 +1588,9 @@ client.on(Events.InteractionCreate, async (i) => {
 });
 /* ────────────── LTC 入金ポーリング ────────────── */
 async function ltcPoll() {
+    await pollOperatorLtc().catch(e => console.error('[ltc-poll] operator:', e.message));
     if (!process.env.LTC_API_TOKEN)
         return;
-    await pollOperatorLtc().catch(e => console.error('[ltc-poll] operator:', e.message));
     // 以前の仕組み (ユーザーごとのアドレス) に送られた分も、引き続き反映する
     const rows = db.prepare('SELECT discord_id, address FROM ltc_addresses').all();
     const rate = await ltcJpyRate().catch(() => null);
@@ -1629,13 +1629,25 @@ async function ltcPoll() {
 setInterval(ltcPoll, 60_000);
 /** 運営の LTC アドレスに届いた送金を、申請した量と照らし合わせて残高に反映する */
 async function pollOperatorLtc() {
-    const addresses = [...new Set(wallets.listWallets('ltc').filter(w => w.enabled).map(w => w.address).filter(Boolean))];
+    const ltcWallets = wallets.listWallets('ltc').filter(w => w.enabled && w.address);
+    const addresses = [...new Set(ltcWallets.map(w => w.address))];
+    const rate = await ltcJpyRate().catch(() => null);
     for (const address of addresses) {
+        const full = await addressFull(address).catch(e => { console.error('[ltc-poll]', address, e.message); return null; });
+        if (!full)
+            continue;
+        // 実際の残高を最新のレートで円に直して記録する (Bot の外でお金が動いても、LTC の値動きがあっても合わせる)
+        if (rate) {
+            for (const w of ltcWallets.filter(x => x.address === address))
+                wallets.setCached(w.id, Math.floor(full.balanceSat / 1e8 * rate));
+            invalidateLiquidityCache();
+        }
+        if (!process.env.LTC_API_TOKEN)
+            continue; // 入金の照合は今までどおり API トークンがあるときだけ
         const since = ltcMatch.firstRequestAt(address);
         if (since === null)
             continue; // まだ申請が無いアドレスは見ない
-        const txs = await incomingTxs(address);
-        for (const tx of txs) {
+        for (const tx of full.incoming) {
             if (tx.receivedAt < since - 120)
                 continue; // 申請を受け付ける前からの送金は対象外
             if (db.prepare('SELECT 1 FROM deposits WHERE tx_ref=?').get(tx.txid))
