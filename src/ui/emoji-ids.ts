@@ -1,5 +1,5 @@
 // Discord のアプリ絵文字 (bot に登録した絵文字) の名前と ID。
-// card_* / dice_* / rl_* / slot_* はカード等の自作画像、deco_* / game_* / pay_* / ui_* はパネル装飾用。
+// card_* / dice_* / rl_* / slot_* はカード等の自作画像、deco_* / game_* / pay_* / ui_* はパネル装飾用、gauge_* は残高ゲージ用。
 
 export const EMOJI_IDS = {
   "card_back": "1574229074329473196",
@@ -113,21 +113,33 @@ export const EMOJI_IDS = {
   "game_roulette": "1575517259550564363",
   "game_slots": "1575512004590960780",
   "game_videopoker": "1575512008508317739",
-  "pay_ltc": "1575512013042614323",
-  "pay_paypay": "1575512020999209090",
+  "pay_ltc": "1575520758371975248",
+  "pay_paypay": "1575520763828510743",
   "ui_arrow": "1575512025428398090",
   "ui_balance": "1575512029601468416",
   "ui_check": "1575512033703624796",
   "ui_chip": "1575513329844101140",
   "ui_crown": "1575512041857486918",
   "ui_sparkle": "1575512046236209345",
-  "ui_wallet": "1575512050271002666"
+  "ui_wallet": "1575512050271002666",
+  "gauge_empty_l": "1575520737567969330",
+  "gauge_empty_m": "1575520739212140655",
+  "gauge_empty_r": "1575520740852367530",
+  "gauge_ltc_l": "1575520742710313111",
+  "gauge_ltc_m": "1575520744367071333",
+  "gauge_ltc_r": "1575520746099179704",
+  "gauge_mix_l": "1575520747676237904",
+  "gauge_mix_m": "1575520749165482126",
+  "gauge_mix_r": "1575520750796935168",
+  "gauge_pp_l": "1575520752290103347",
+  "gauge_pp_m": "1575520753791799382",
+  "gauge_pp_r": "1575520755893010543"
 } as const;
 
 export type EmojiName = keyof typeof EMOJI_IDS;
 
 /** 動く (GIF) 絵文字。Discord では `<a:name:id>` と書かないと動かない。 */
-export const ANIMATED: ReadonlySet<string> = new Set(["deco_fire", "game_slots"]);
+export const ANIMATED: ReadonlySet<string> = new Set(["deco_fire", "game_slots", "pay_ltc", "pay_paypay"]);
 
 /** Discord 絵文字タグを返す (動く絵文字は `<a:name:id>`)。存在しない name は空文字。 */
 export function emoji(name: string): string {

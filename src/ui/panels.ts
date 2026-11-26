@@ -1,11 +1,11 @@
-import { ActionRowBuilder, AttachmentBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
+import { ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import { L } from './leet.js';
-import { renderBalance } from './render-balance.js';
 import { formatRemaining, elapsedRatio, EXTENSION_PERIOD_SEC, type MwsState } from '../mws/timer.js';
 import type { Game } from '../tables.js';
 import { emojiRef } from './emoji-ids.js';
 import { gamePanelEmbed, cashierEmbed } from './overview.js';
-import { ICON } from './theme.js';
+import { COLOR, ICON } from './theme.js';
+import { emojiGauge } from './balance-gauge.js';
 
 
 
@@ -76,17 +76,25 @@ export function publicGamePanel(game: Game) {
 }
 
 /**
- * 残高カード (画像 embed)。/balance と Cashier パネルの残高確認で使用。
- * 返り値をそのまま interaction.reply に展開できる形で返す。
+ * 残高カード。/balance と各パネルの [残高] ボタンで使う。
+ * 合計と、PayPay 由来 / LTC 由来の割合を絵文字のゲージで出す。
  */
 export async function balanceReply(pp: number, ltc: number, note?: string) {
-  const png = await renderBalance({ pp, ltc, note });
-  const file = new AttachmentBuilder(png, { name: 'balance.png' });
+  const total = pp + ltc;
+  const share = (n: number) => (total > 0 ? ` (${((n / total) * 100).toFixed(1)}%)` : '');
+  const lines = [
+    `### ${ICON.balance()} 残高`,
+    `# ¥${total.toLocaleString()}`,
+    emojiGauge(pp, ltc),
+    `${ICON.paypay()} PayPay 由来  **¥${pp.toLocaleString()}**${share(pp)}`,
+    `${ICON.ltc()} LTC 由来  **¥${ltc.toLocaleString()}**${share(ltc)}`,
+  ];
+  if (note) lines.push('', note);
   const embed = new EmbedBuilder()
-    .setColor(0xd4af37)
-    .setImage('attachment://balance.png')
-    .setFooter({ text: '入金したレール分だけ、そのレールで出金できます' });
-  return { embeds: [embed], files: [file] };
+    .setColor(COLOR.violet)
+    .setDescription(lines.join('\n'))
+    .setFooter({ text: '出金は、入金した方法の分まで (PayPay で入れた分は PayPay で)' });
+  return { embeds: [embed], files: [] };
 }
 
 export function depositPanel() {
