@@ -1285,11 +1285,17 @@ async function onSelect(i: StringSelectMenuInteraction) {
   if (i.customId === 'rou:select') return openTable(i as unknown as ButtonInteraction, 'roulette');
 }
 
+/** 運営の受け取りウォレットが無い入金方法は、入力画面を開かずに知らせる */
+const depositUnavailable = (i: ButtonInteraction | StringSelectMenuInteraction | ChatInputCommandInteraction, method: string) =>
+  i.reply({ content: `${method} の入金は今は使えません (運営の受け取りウォレットが未登録)。`, flags: MessageFlags.Ephemeral });
+const hasLtcWallet = () => wallets.listWallets('ltc').some(w => w.enabled);
+
 async function openPaypayDepositModal(i: ButtonInteraction | StringSelectMenuInteraction | ChatInputCommandInteraction, ctx = '') {
+  if (!wallets.pickPaypayWallet()) return depositUnavailable(i, 'PayPay');
   const modal = new ModalBuilder().setCustomId(`dep:paypay${ctx ? `:${ctx}` : ''}`).setTitle('PayPay 送金リンク入金')
     .addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
-        new TextInputBuilder().setCustomId('url').setLabel('送金リンク URL または ID').setStyle(TextInputStyle.Short).setRequired(true)),
+        new TextInputBuilder().setCustomId('url').setLabel('送金リンク').setPlaceholder('https://pay.paypay.ne.jp/...').setStyle(TextInputStyle.Short).setRequired(true)),
       new ActionRowBuilder<TextInputBuilder>().addComponents(
         new TextInputBuilder().setCustomId('pin').setLabel('パスコード (設定していれば)').setStyle(TextInputStyle.Short).setRequired(false)),
     );
@@ -1298,6 +1304,7 @@ async function openPaypayDepositModal(i: ButtonInteraction | StringSelectMenuInt
 
 /** LTC 選択時: 直接モーダルを開いて JPY を入力させる (空欄なら見積なしでアドレスだけ返す) */
 async function showLtcAddress(i: ButtonInteraction | StringSelectMenuInteraction | ChatInputCommandInteraction, ctx = '') {
+  if (!hasLtcWallet()) return depositUnavailable(i, 'LTC');
   const modal = new ModalBuilder().setCustomId(`dep:ltc${ctx ? `:${ctx}` : ''}`).setTitle('LTC 入金')
     .addComponents(
       new ActionRowBuilder<TextInputBuilder>().addComponents(
@@ -1319,6 +1326,7 @@ async function replyLtcQuote(i: ModalSubmitInteraction | ButtonInteraction | Cha
     if (ctx) embed.setDescription(`${embed.data.description ? `${embed.data.description}\n\n` : ''}${replayNote}`);
     return i.editReply({ content: '', embeds: [embed], components: rows });
   };
+  if (!hasLtcWallet()) return fail('LTC の入金は今は使えません (運営の受け取りウォレットが未登録)。');
   const addr = await getOrCreateAddress(i.user.id);
   const rate = await ltcJpyRate().catch(() => null);
 
@@ -1361,7 +1369,10 @@ async function replyLtcQuote(i: ModalSubmitInteraction | ButtonInteraction | Cha
 }
 
 async function processPaypayDeposit(discordId: string, linkInput: string, passcode: string | undefined): Promise<{ amount: number; wallet: string }> {
-  const code = pp.extractLinkId(linkInput);
+  // 受け付けるのは送金リンクだけ (https://pay.paypay.ne.jp/...)
+  const link = linkInput.trim();
+  if (!link.startsWith('https://pay.paypay.ne.jp/')) throw new Error('PayPay の送金リンク (https://pay.paypay.ne.jp/...) を貼ってください');
+  const code = pp.extractLinkId(link);
   if (!code) throw new Error('PayPay 送金リンクを認識できませんでした');
 
   const w = wallets.pickPaypayWallet();
