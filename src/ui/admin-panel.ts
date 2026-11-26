@@ -24,19 +24,20 @@ export const PANEL_KINDS: Array<{ key: string; label: string; emoji: string; gro
   { key: 'craps',      label: 'クラップス',             emoji: 'game_craps',      group: 'ゲーム' },
   { key: 'cashier',    label: '入出金 (Cashier)',       emoji: 'ui_wallet',       group: '入出金' },
   { key: 'overview:all',        label: 'ルール: 全ゲーム概要',     emoji: 'ui_crown',        group: 'ルール説明' },
-  { key: 'overview:blackjack',  label: 'ルール: ブラックジャック', emoji: 'game_blackjack',  group: 'ルール説明' },
-  { key: 'overview:slots',      label: 'ルール: スロット',         emoji: 'game_slots',      group: 'ルール説明' },
-  { key: 'overview:roulette',   label: 'ルール: ルーレット',       emoji: 'game_roulette',   group: 'ルール説明' },
-  { key: 'overview:baccarat',   label: 'ルール: バカラ',           emoji: 'game_baccarat',   group: 'ルール説明' },
-  { key: 'overview:videopoker', label: 'ルール: ビデオポーカー',   emoji: 'game_videopoker', group: 'ルール説明' },
-  { key: 'overview:craps',      label: 'ルール: クラップス',       emoji: 'game_craps',      group: 'ルール説明' },
   { key: 'overview:cashier',    label: 'ルール: 入出金',           emoji: 'ui_wallet',       group: 'ルール説明' },
 ];
-/** 以前は設置できたパネル。今は /mws・/leet コマンドで使う。設置済みのものは一覧と再設置で扱う。 */
+/** 以前は設置できたパネル。ゲームごとのルールは全ゲーム概要とゲームのパネルにある。MWS・LEET は /mws・/leet コマンドで使う。設置済みのものは一覧と再設置で扱う。 */
 const LEGACY_KINDS = [
+  { key: 'overview:blackjack', label: 'ルール: ブラックジャック (旧)', emoji: 'game_blackjack' },
+  { key: 'overview:slots', label: 'ルール: スロット (旧)', emoji: 'game_slots' },
+  { key: 'overview:roulette', label: 'ルール: ルーレット (旧)', emoji: 'game_roulette' },
+  { key: 'overview:baccarat', label: 'ルール: バカラ (旧)', emoji: 'game_baccarat' },
+  { key: 'overview:videopoker', label: 'ルール: ビデオポーカー (旧)', emoji: 'game_videopoker' },
+  { key: 'overview:craps', label: 'ルール: クラップス (旧)', emoji: 'game_craps' },
   { key: 'mws',  label: 'MWS 延長タイマー (旧)', emoji: 'adm_server' },
   { key: 'leet', label: 'LEET 変換 (旧)',        emoji: 'adm_leet' },
 ];
+export const isLegacyPanelKey = (key: string) => LEGACY_KINDS.some(k => k.key === key);
 /** 管理パネル。ゲーム管理パネルの対象外で、/admin panel でだけ設置する。 */
 export const ADMIN_PANEL_KINDS = [
   { key: 'admin:games',  label: 'ゲーム管理パネル' },

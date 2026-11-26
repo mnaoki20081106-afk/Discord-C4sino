@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, Partials, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, Events, PermissionFlagsBits, EmbedBuilder, ButtonBuilder, ButtonStyle, MessageFlags, } from 'discord.js';
-import { adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal, panelLabel, isAdminPanelKey, mwsResetScreen, mwsWarningEmbed, } from './ui/admin-panel.js';
+import { adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal, panelLabel, isAdminPanelKey, isLegacyPanelKey, mwsResetScreen, mwsWarningEmbed, } from './ui/admin-panel.js';
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
 import * as sessions from './games/session-store.js';
 import { openTable, replayInPlace, onTableButton, onTableSelect, onTableModal, onBlackjackAction, onVideoPokerAction, onCrapsAction, isGame, setTablesClient, } from './tables.js';
@@ -1042,21 +1042,32 @@ async function onAdminPanel(i) {
         }
         if (act === 'reinstall') {
             const n = gamePanels(gid).length;
-            return showAdmin(i, confirmScreen('全パネルを再設置', [`設置済みの ${n} 個のパネル (ゲーム・入出金・ルール説明など) を消して、同じチャンネルに置き直します`, '置き直したパネルは最新の見た目になります', '管理パネルは対象外 (/admin panel で置き直す)'], 'ap:games:reinstallgo', 'ap:open:games'));
+            return showAdmin(i, confirmScreen('全パネルを再設置', [`設置済みの ${n} 個のパネル (ゲーム・入出金・ルール説明など) を消して、同じチャンネルに置き直します`, '置き直したパネルは最新の見た目になります', '「(旧)」のパネルは置き直さずに消します', '管理パネルは対象外 (/admin panel で置き直す)'], 'ap:games:reinstallgo', 'ap:open:games'));
         }
         if (act === 'reinstallgo') {
             await i.deferUpdate();
             const rows = gamePanels(gid);
             const failed = [];
+            let removed = 0;
             for (const p of rows) {
+                if (isLegacyPanelKey(p.game)) { // 今は設置しない種類は消すだけ
+                    const ch = await client.channels.fetch(p.channel_id).catch(() => null);
+                    if (ch && 'messages' in ch)
+                        await ch.messages.delete(p.message_id).catch(() => { });
+                    db.prepare('DELETE FROM panels WHERE channel_id=? AND game=?').run(p.channel_id, p.game);
+                    removed++;
+                    continue;
+                }
                 const err = await installPanel(gid, p.channel_id, p.game);
                 if (err)
                     failed.push(`${panelLabel(p.game)} (<#${p.channel_id}>): ${err}`);
             }
             await refreshAdminLandings(gid, ['admin:games']);
+            const total = rows.length - removed;
+            const gone = removed ? ` (旧) のパネル ${removed} 個は消しました。` : '';
             return renderAdmin(i, 'games', failed.length
-                ? { ok: false, text: `${rows.length - failed.length} / ${rows.length} 個を置き直しました。失敗: ${failed.join(' / ')}` }
-                : { ok: true, text: `${rows.length} 個のパネルを置き直しました` });
+                ? { ok: false, text: `${total - failed.length} / ${total} 個を置き直しました。${gone}失敗: ${failed.join(' / ')}` }
+                : { ok: true, text: `${total} 個のパネルを置き直しました。${gone}` });
         }
     }
     /* ② ウォレット */
