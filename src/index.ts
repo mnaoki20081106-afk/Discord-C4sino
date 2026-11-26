@@ -9,7 +9,7 @@ import {
 import {
   adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal,
   panelLabel, isAdminPanelKey, isLegacyPanelKey, type InstalledPanel, type WalletRow, type UserSummary, type Notice,
-  mwsResetScreen, mwsWarningEmbed, ltcUnmatchedEmbed,
+  mwsResetScreen, mwsWarningEmbed, ltcUnmatchedEmbed, salesScreen, type SalesSummary,
 } from './ui/admin-panel.js';
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
 import * as sessions from './games/session-store.js';
@@ -1034,8 +1034,28 @@ async function renderAdmin(i: AdminI, screenName: string, notice?: Notice) {
     case 'ng':     return showAdmin(i, ngScreen(listBannedWords(gid).map(w => w.word), notice));
     case 'user':   return showAdmin(i, userScreen(s.userId ? await userSummary(s.userId) : undefined, notice));
     case 'ops':    return showAdmin(i, opsScreen(ach.getConfig(gid), notice));
+    case 'sales':  return showAdmin(i, salesScreen(salesSummary()));
     default:       return showAdmin(i, adminHub());
   }
+}
+
+/** 売上: 確定した入金と、送り終えた出金の合計 (円) */
+function salesSummary(): SalesSummary {
+  const now = Math.floor(Date.now() / 1000);
+  const sum = (sql: string, ...args: unknown[]) => (db.prepare(sql).get(...args) as { s: number }).s;
+  const period = (since: number) => {
+    const dep = (m: string) => sum(`SELECT COALESCE(SUM(amount_jpy),0) s FROM deposits WHERE status='confirmed' AND method=? AND COALESCE(confirmed_at, created_at) >= ?`, m, since);
+    const wd  = (m: string) => sum(`SELECT COALESCE(SUM(net_jpy),0) s FROM withdrawals WHERE status='sent' AND method=? AND COALESCE(completed_at, created_at) >= ?`, m, since);
+    return { depPaypay: dep('paypay'), depLtc: dep('ltc'), wdPaypay: wd('paypay'), wdLtc: wd('ltc') };
+  };
+  const d = new Date((now + 9 * 3600) * 1000);                       // 日本時間の今日 0 時
+  const today = Math.floor(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) / 1000) - 9 * 3600;
+  return {
+    today: period(today),
+    days30: period(now - 30 * 86400),
+    all: period(0),
+    userBalance: sum('SELECT COALESCE(SUM(balance),0) s FROM users'),
+  };
 }
 
 /** 最近の入金 (別の画面に出す) */

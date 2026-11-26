@@ -253,6 +253,7 @@ export function serverHome(notice?: Notice) {
     { icon: ADM.ng(), title: 'NG ワード管理', lines: ['一覧・追加・削除'] },
     { icon: ADM.user(), title: 'ユーザー管理', lines: ['ユーザーを選んで、情報・履歴・chip 付与・手動送金・BAN'] },
     { icon: ADM.chart(), title: '運営データ', lines: ['統計・出金の保留・最近の入金・当選告知の設定'] },
+    { icon: ADM.wallet(), title: '売上', lines: ['入金額・出金額・利益 (今日 / 30 日 / 累計)'] },
     { icon: ADM.bullet(), title: 'コマンド', lines: ['`/mws` MWS で延長したら実行。7 日タイマーをリセット', '`/leet` 文字列を LEET 表記に変換', 'MWS の期限が近づくと、このチャンネルに通知が届く'] },
   ], notice, ADM.server());
   return {
@@ -261,6 +262,7 @@ export function serverHome(notice?: Notice) {
       btn('ap:open:ng', 'NG ワード管理', ButtonStyle.Secondary, 'adm_ng'),
       btn('ap:open:user', 'ユーザー管理', ButtonStyle.Secondary, 'adm_user'),
       btn('ap:open:ops', '運営データ', ButtonStyle.Secondary, 'adm_chart'),
+      btn('ap:open:sales', '売上', ButtonStyle.Secondary, 'adm_wallet'),
     )],
   };
 }
@@ -403,4 +405,33 @@ export function ltcUnmatchedEmbed(address: string, txid: string, valueSat: numbe
       { icon: ADM.user(), title: 'やること', lines: ['送った本人に確認して、ユーザー管理から chip を付与する', '量がずれたか、期限を過ぎてから送られた可能性があります'] },
     ],
   });
+}
+
+/* ────────────── 売上 ────────────── */
+
+export interface SalesPeriod { depPaypay: number; depLtc: number; wdPaypay: number; wdLtc: number }
+export interface SalesSummary { today: SalesPeriod; days30: SalesPeriod; all: SalesPeriod; userBalance: number }
+
+const yen = (n: number) => `${n < 0 ? '-' : ''}¥${Math.abs(n).toLocaleString()}`;
+
+export function salesScreen(sum: SalesSummary) {
+  const block = (p: SalesPeriod) => {
+    const dep = p.depPaypay + p.depLtc, wd = p.wdPaypay + p.wdLtc;
+    return [
+      `入金 **${yen(dep)}** (PayPay ${yen(p.depPaypay)} / LTC ${yen(p.depLtc)})`,
+      `出金 **${yen(wd)}** (PayPay ${yen(p.wdPaypay)} / LTC ${yen(p.wdLtc)})`,
+      `利益 **${yen(dep - wd)}**`,
+    ];
+  };
+  const embed = screen('売上', '入金 − 出金 = 利益', [
+    { icon: ADM.chart(), title: '今日', lines: block(sum.today) },
+    { icon: ADM.chart(), title: '30 日', lines: block(sum.days30) },
+    { icon: ADM.wallet(), title: '累計', lines: block(sum.all) },
+    { icon: ADM.bullet(), title: '数え方', lines: [
+      '入金: 残高に反映した入金 / 出金: 送り終えた出金 (ユーザーに届いた額)',
+      'chip 付与と 0 円のテストプレイは含めない',
+      `ユーザーが今持っている残高の合計: ${yen(sum.userBalance)} (これから出金される可能性がある額)`,
+    ] },
+  ], undefined, ADM.wallet());
+  return { embeds: [embed], components: [row(btn('ap:open:sales', '表示を更新'), btn('ap:open:server', '戻る'))] };
 }
