@@ -4,12 +4,17 @@ import {
   TextInputBuilder, TextInputStyle, ActionRowBuilder, Events, PermissionFlagsBits,
   EmbedBuilder, ButtonBuilder, ButtonStyle, ChatInputCommandInteraction,
   ButtonInteraction, ModalSubmitInteraction, StringSelectMenuInteraction, MessageFlags,
+  UserSelectMenuInteraction, ChannelSelectMenuInteraction,
 } from 'discord.js';
+import {
+  adminHub, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal,
+  panelLabel, type InstalledPanel, type WalletRow, type UserSummary, type Notice,
+} from './ui/admin-panel.js';
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
 import * as sessions from './games/session-store.js';
 import {
   openTable, replayInPlace, onTableButton, onTableSelect, onTableModal,
-  onBlackjackAction, onVideoPokerAction, onCrapsAction, isGame, setTablesClient, type Game,
+  onBlackjackAction, onVideoPokerAction, onCrapsAction, isGame, setTablesClient,
 } from './tables.js';
 import { depositPanel, depositMethodPicker, withdrawMethodPicker, balanceReply, leetPanel, mwsPanel, mwsWarningText, replayRowFromCtx, publicGamePanel } from './ui/panels.js';
 import * as mws from './mws/timer.js';
@@ -123,6 +128,7 @@ client.on(Events.InteractionCreate, async (i) => {
     else if (i.isButton()) await onButton(i);
     else if (i.isModalSubmit()) await onModal(i);
     else if (i.isStringSelectMenu()) await onSelect(i);
+    else if ((i.isUserSelectMenu() || i.isChannelSelectMenu()) && i.customId.startsWith('ap:')) await onAdminPanel(i);
   } catch (e) {
     console.error(e);
     const msg = `❌ ${(e as Error).message}`;
@@ -137,74 +143,10 @@ client.on(Events.InteractionCreate, async (i) => {
 
 async function onCommand(i: ChatInputCommandInteraction) {
   switch (i.commandName) {
-    case 'setup':    return cmdSetup(i);
     case 'balance':  return cmdBalance(i);
-    case 'wallet':   return cmdWallet(i);
     case 'admin':    return cmdAdmin(i);
     case 'pay':      return cmdPay(i);
     case 'withdraw': return cmdWithdraw(i);
-    case 'banned-words': return cmdBannedWords(i);
-    case 'paypay':       return cmdPaypay(i);
-    case 'leet':         return cmdLeet(i);
-    case 'mws':          return cmdMws(i);
-    case 'blackjack':  return installPlayPanel(i, 'blackjack');
-    case 'slots':      return installPlayPanel(i, 'slots');
-    case 'roulette':   return installPlayPanel(i, 'roulette');
-    case 'baccarat':   return installPlayPanel(i, 'baccarat');
-    case 'videopoker': return installPlayPanel(i, 'videopoker');
-    case 'craps':      return installPlayPanel(i, 'craps');
-  }
-}
-
-/* ────────────── /GAME: install Play panel ────────────── */
-
-async function installPlayPanel(i: ChatInputCommandInteraction, game: Game) {
-  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageChannels))
-    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
-  if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
-  const msg = await i.channel.send(publicGamePanel(game));
-  db.prepare('INSERT OR REPLACE INTO panels(guild_id,channel_id,message_id,game) VALUES (?,?,?,?)')
-    .run(i.guildId!, i.channelId, msg.id, game);
-  await i.reply({ content: `✅ ${game} 卓を設置しました`, flags: MessageFlags.Ephemeral });
-}
-
-async function cmdBannedWords(i: ChatInputCommandInteraction) {
-  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
-    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
-  if (!i.guild) return i.reply({ content: 'ギルド内で実行してください', flags: MessageFlags.Ephemeral });
-  const sub = i.options.getSubcommand();
-
-  if (sub === 'add') {
-    const word = i.options.getString('word', true);
-    const r = addBannedWord(i.guild.id, word, i.user.id);
-    if (!r.added) return i.reply({ content: `⚠️ 追加失敗: ${r.reason}`, flags: MessageFlags.Ephemeral });
-    return i.reply({ content: `✅ \`${word}\` を NG ワードに追加しました (次の投稿から即反映、伏字化されます)`, flags: MessageFlags.Ephemeral });
-  }
-
-  if (sub === 'remove') {
-    const word = i.options.getString('word', true);
-    const ok = removeBannedWord(i.guild.id, word);
-    if (!ok) return i.reply({ content: `⚠️ \`${word}\` は登録されていません`, flags: MessageFlags.Ephemeral });
-    return i.reply({ content: `🗑️ \`${word}\` を NG ワードから削除しました`, flags: MessageFlags.Ephemeral });
-  }
-
-  if (sub === 'list') {
-    const words = listBannedWords(i.guild.id);
-    // 説明欄の上限 4096 文字に収まる所まで並べ、残りは件数だけ出す
-    let body = '';
-    let shown = 0;
-    for (const r of words) {
-      const piece = `${shown ? ', ' : ''}\`${r.word}\``;
-      if (body.length + piece.length > 3900) break;
-      body += piece; shown++;
-    }
-    if (shown < words.length) body += ` … ほか ${words.length - shown} 語`;
-    const embed = new EmbedBuilder()
-      .setTitle(`🚫 NG ワード一覧 (${words.length})`)
-      .setColor(0xd4af37)
-      .setDescription(body || '_(なし)_')
-      .setFooter({ text: 'どの語も /banned-words remove で削除できます' });
-    return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -227,53 +169,10 @@ async function cmdPay(i: ChatInputCommandInteraction) {
   }
 }
 
-async function cmdSetup(i: ChatInputCommandInteraction) {
-  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageChannels))
-    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
-  const type = i.options.getString('type', true) as 'panel' | 'overview';
-  const game = i.options.getString('game', true);
-  if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
-
-  if (type === 'overview') {
-    await i.channel.send({ embeds: [gameOverview(game as GameKey)] });
-    return i.reply({ content: `✅ ${game} 概要パネルを設置`, flags: MessageFlags.Ephemeral });
-  }
-
-  // type === 'panel': インタラクティブなベット/操作用パネル。all は overview 専用。
-  if (game === 'all') return i.reply({ content: 'all は overview でのみ使用可能 (type:overview を指定)', flags: MessageFlags.Ephemeral });
-  const payload = isGame(game) ? publicGamePanel(game) : depositPanel();
-  const msg = await i.channel.send(payload);
-  db.prepare('INSERT OR REPLACE INTO panels(guild_id,channel_id,message_id,game) VALUES (?,?,?,?)')
-    .run(i.guildId!, i.channelId, msg.id, game);
-  await i.reply({ content: `✅ ${game} パネルを設置`, flags: MessageFlags.Ephemeral });
-}
-
-async function cmdMws(i: ChatInputCommandInteraction) {
-  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageChannels))
-    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
-  if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
-  const msg = await i.channel.send(mwsPanel(mws.getState()));
-  db.prepare('INSERT OR REPLACE INTO panels(guild_id,channel_id,message_id,game) VALUES (?,?,?,?)')
-    .run(i.guildId!, i.channelId, msg.id, 'mws');
-  await i.reply({ content: '✅ MWS タイマーパネルを設置', flags: MessageFlags.Ephemeral });
-}
-
 async function cmdBalance(i: ChatInputCommandInteraction) {
   const r = getReserves(i.user.id);
   const payload = await balanceReply(r.pp, r.ltc);
   await i.reply({ ...payload, flags: MessageFlags.Ephemeral });
-}
-
-/* ────────────── /leet (admin LEET converter panel) ────────────── */
-
-async function cmdLeet(i: ChatInputCommandInteraction) {
-  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
-    return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
-  if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
-  const msg = await i.channel.send(leetPanel());
-  db.prepare('INSERT OR REPLACE INTO panels(guild_id,channel_id,message_id,game) VALUES (?,?,?,?)')
-    .run(i.guildId!, i.channelId, msg.id, 'leet');
-  await i.reply({ content: '✅ LEET 変換パネルを設置しました', flags: MessageFlags.Ephemeral });
 }
 
 /* ────────────── /paypay (admin direct ops) ────────────── */
@@ -923,15 +822,8 @@ async function cmdAdmin(i: ChatInputCommandInteraction) {
   }
   if (sub === 'panel') {
     if (!i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
-    const embed = new EmbedBuilder().setTitle('🛠️  Admin Panel').setColor(0xd4af37)
-      .setDescription('カジノ運営の各種ショートカット');
-    const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-      new ButtonBuilder().setCustomId('adm:stats').setLabel('統計').setStyle(ButtonStyle.Primary),
-      new ButtonBuilder().setCustomId('adm:wallets').setLabel('ウォレット一覧').setStyle(ButtonStyle.Secondary),
-      new ButtonBuilder().setCustomId('adm:pending').setLabel('最近の入金').setStyle(ButtonStyle.Secondary),
-    );
-    await i.channel.send({ embeds: [embed], components: [row] });
-    return i.reply({ content: '✅ 管理パネル設置', flags: MessageFlags.Ephemeral });
+    const err = await installPanel(i.guildId!, i.channelId, 'admin');
+    return i.reply({ content: err ? `設置できませんでした: ${err}` : '管理パネルを設置しました', flags: MessageFlags.Ephemeral });
   }
 }
 
@@ -963,6 +855,7 @@ async function onButton(i: ButtonInteraction) {
   if (ns === 'rou')  return openTable(i, 'roulette');
   if (ns === 'bac')  return openTable(i, 'baccarat', kind === 'side' ? arg : undefined);
   if (ns === 'dep') return onDepositButton(i, kind, i.customId.split(':').slice(2).join(':'));
+  if (ns === 'ap')  return onAdminPanel(i);
   if (ns === 'adm') return onAdminButton(i, kind);
   if (ns === 'wd' && (kind === 'approve' || kind === 'reject')) return onWithdrawAdmin(i, kind, arg);
   if (ns === 'wd' && (kind === 'open' || kind === 'paypay' || kind === 'ltc')) return onWithdrawUserButton(i, kind);
@@ -1036,27 +929,281 @@ async function onWithdrawAdmin(i: ButtonInteraction, kind: string, arg: string) 
   }
 }
 
+/** 以前の管理パネル (adm:stats / adm:wallets / adm:pending) のボタン */
 async function onAdminButton(i: ButtonInteraction, kind: string) {
   if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
     return i.reply({ content: '権限不足', flags: MessageFlags.Ephemeral });
-  if (kind === 'stats') {
-    // reuse command logic
-    const fake = { ...i, options: { getSubcommand: () => 'stats' } } as any;
-    return cmdAdmin(fake);
+  if (kind === 'stats') return cmdAdmin(asCommand(i, 'stats'));
+  if (kind === 'wallets') return renderAdmin(i, 'wallet');
+  if (kind === 'pending') return replyRecentDeposits(i);
+}
+
+/* ────────────── 管理パネル (/admin panel) ────────────── */
+
+type AdminI = ButtonInteraction | StringSelectMenuInteraction | UserSelectMenuInteraction | ChannelSelectMenuInteraction | ModalSubmitInteraction;
+
+/** 管理者ごとの選択中の値 (設置するパネルの種類・チャンネル、ウォレット、ユーザー)。 */
+const adminSel = new Map<string, { kind?: string; channelId?: string; walletId?: number; userId?: string }>();
+const selOf = (uid: string) => { let s = adminSel.get(uid); if (!s) { s = {}; adminSel.set(uid, s); } return s; };
+
+/**
+ * 既存のコマンド処理 (cmdAdmin / cmdWallet / cmdPaypay) をパネルから呼ぶための変換。
+ * 入力画面などで集めた値を、コマンドの入力欄 (i.options.getXxx) と同じ形で渡す。
+ * Object.create で元の操作を下敷きにするので、reply などの機能はそのまま使える。
+ */
+function asCommand(i: AdminI, sub: string, values: Record<string, unknown> = {}): ChatInputCommandInteraction {
+  const get = (name: string) => (values[name] ?? null) as any;
+  const options = {
+    getSubcommand: () => sub,
+    getString: get, getInteger: get, getNumber: get, getUser: get, getChannel: get, getBoolean: get,
+  };
+  return Object.assign(Object.create(i), { options }) as ChatInputCommandInteraction;
+}
+
+const isEphemeralMsg = (i: AdminI) =>
+  'message' in i && !!i.message && (i.message.flags?.has(MessageFlags.Ephemeral) ?? false);
+
+/** 管理パネルの画面を出す。チャンネルのハブから押されたら本人だけの新しい画面、画面の中なら書き換え。 */
+async function showAdmin(i: AdminI, payload: { embeds: EmbedBuilder[]; components: ActionRowBuilder<any>[] }) {
+  if (i.deferred || i.replied) return i.editReply(payload);
+  if (isEphemeralMsg(i)) {
+    if (i.isModalSubmit()) { if (i.isFromMessage()) return i.update(payload); }
+    else return i.update(payload);
   }
-  if (kind === 'wallets') {
-    const fake = { ...i, options: { getSubcommand: () => 'list' } } as any;
-    return cmdWallet(fake);
+  return i.reply({ ...payload, flags: MessageFlags.Ephemeral });
+}
+
+function installedPanels(guildId: string): InstalledPanel[] {
+  return db.prepare('SELECT channel_id, message_id, game FROM panels WHERE guild_id=? ORDER BY rowid').all(guildId) as InstalledPanel[];
+}
+
+/** 設置するパネルの中身。key は PANEL_KINDS の key。 */
+function panelPayload(key: string): { embeds: EmbedBuilder[]; components?: ActionRowBuilder<any>[] } | null {
+  if (isGame(key)) return publicGamePanel(key);
+  if (key === 'cashier') return depositPanel();
+  if (key.startsWith('overview:')) return { embeds: [gameOverview(key.slice(9) as GameKey)] };
+  if (key === 'mws') return mwsPanel(mws.getState());
+  if (key === 'leet') return leetPanel();
+  if (key === 'admin') return adminHub();
+  return null;
+}
+
+/** 1 つ設置する。同じチャンネルに同じ種類があれば、古い方を消して置き直す。 */
+async function installPanel(guildId: string, channelId: string, key: string): Promise<string | null> {
+  const payload = panelPayload(key);
+  if (!payload) return '不明なパネルです';
+  const ch = await client.channels.fetch(channelId).catch(() => null);
+  if (!ch || !('send' in ch)) return 'そのチャンネルには投稿できません';
+  const old = db.prepare('SELECT message_id FROM panels WHERE channel_id=? AND game=?').get(channelId, key) as { message_id: string } | undefined;
+  if (old && 'messages' in ch) await (ch as any).messages.delete(old.message_id).catch(() => {});
+  try {
+    const msg = await (ch as any).send(payload);
+    db.prepare('INSERT OR REPLACE INTO panels(guild_id,channel_id,message_id,game) VALUES (?,?,?,?)').run(guildId, channelId, msg.id, key);
+    return null;
+  } catch (e) {
+    return `投稿できませんでした (${(e as Error).message})`;
   }
-  if (kind === 'pending') {
-    const rows = db.prepare(`SELECT id, discord_id, method, amount_jpy, status, created_at FROM deposits
-      ORDER BY id DESC LIMIT 15`).all() as Array<any>;
-    const txt = rows.map(r => {
-      const d = new Date(r.created_at*1000).toISOString().slice(0,16).replace('T',' ');
-      return `\`${d}\` #${r.id} [${r.method}] <@${r.discord_id}> ¥${r.amount_jpy.toLocaleString()} — **${r.status}**`;
-    }).join('\n') || '履歴なし';
-    const embed = new EmbedBuilder().setTitle('🧾 最近の入金').setDescription(txt).setColor(0xd4af37);
-    return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+}
+
+function adminWallets() {
+  return wallets.listWallets() as unknown as WalletRow[];
+}
+
+async function userSummary(uid: string): Promise<UserSummary> {
+  ensureUser(uid);
+  const r = getReserves(uid);
+  return { id: uid, pp: r.pp, ltc: r.ltc, banned: isBanned(uid) };
+}
+
+async function renderAdmin(i: AdminI, screenName: string, notice?: Notice) {
+  const gid = i.guildId!;
+  const s = selOf(i.user.id);
+  switch (screenName) {
+    case 'games':  return showAdmin(i, gamesScreen(installedPanels(gid), s, notice));
+    case 'wallet': return showAdmin(i, walletScreen(adminWallets(), s.walletId, notice));
+    case 'server': return showAdmin(i, serverHome(notice));
+    case 'ng':     return showAdmin(i, ngScreen(listBannedWords(gid).map(w => w.word), notice));
+    case 'user':   return showAdmin(i, userScreen(s.userId ? await userSummary(s.userId) : undefined, notice));
+    case 'ops':    return showAdmin(i, opsScreen(ach.getConfig(gid), notice));
+    default:       return showAdmin(i, adminHub());
+  }
+}
+
+/** 最近の入金 (別の画面に出す) */
+async function replyRecentDeposits(i: AdminI) {
+  const rows = db.prepare(`SELECT id, discord_id, method, amount_jpy, status, created_at FROM deposits ORDER BY id DESC LIMIT 15`).all() as Array<any>;
+  const txt = rows.map(r => `<t:${r.created_at}:f> #${r.id} ${r.method === 'paypay' ? 'PayPay' : 'LTC'} <@${r.discord_id}> ¥${r.amount_jpy.toLocaleString()} — **${r.status}**`).join('\n') || '履歴なし';
+  const embed = new EmbedBuilder().setTitle('最近の入金').setDescription(txt.slice(0, 4096)).setColor(0x4f46e5);
+  return i.reply({ embeds: [embed], flags: MessageFlags.Ephemeral });
+}
+
+async function onAdminPanel(i: AdminI) {
+  if (!i.guildId) return;
+  if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
+    return i.reply({ content: '管理パネルはサーバー管理権限のある人だけが使えます', flags: MessageFlags.Ephemeral });
+  const [, sec, act, arg] = i.customId.split(':');
+  const s = selOf(i.user.id);
+  const gid = i.guildId;
+
+  // 画面の切り替え
+  if (sec === 'open') {
+    if (act === 'leet') return onLeetButton(i as ButtonInteraction);
+    return renderAdmin(i, act);
+  }
+
+  /* ① ゲームパネル */
+  if (sec === 'games') {
+    if (act === 'kind' && i.isStringSelectMenu()) { s.kind = i.values[0]; return renderAdmin(i, 'games'); }
+    if (act === 'channel' && i.isChannelSelectMenu()) { s.channelId = i.values[0]; return renderAdmin(i, 'games'); }
+    if (act === 'install') {
+      if (!s.kind || !s.channelId) return renderAdmin(i, 'games', { ok: false, text: '種類とチャンネルを選んでください' });
+      await (i as ButtonInteraction).deferUpdate();
+      const err = await installPanel(gid, s.channelId, s.kind);
+      return renderAdmin(i, 'games', err ? { ok: false, text: err } : { ok: true, text: `${panelLabel(s.kind)} を <#${s.channelId}> に設置しました` });
+    }
+    if (act === 'reinstall') {
+      const n = installedPanels(gid).length;
+      return showAdmin(i, confirmScreen('全パネルを再設置', [`設置済みの ${n} 個のパネルを消して、同じチャンネルに置き直します`, '置き直したパネルは最新の見た目になります'], 'ap:games:reinstallgo', 'ap:open:games'));
+    }
+    if (act === 'reinstallgo') {
+      await (i as ButtonInteraction).deferUpdate();
+      const rows = installedPanels(gid);
+      const failed: string[] = [];
+      for (const p of rows) {
+        const err = await installPanel(gid, p.channel_id, p.game);
+        if (err) failed.push(`${panelLabel(p.game)} (<#${p.channel_id}>): ${err}`);
+      }
+      return renderAdmin(i, 'games', failed.length
+        ? { ok: false, text: `${rows.length - failed.length} / ${rows.length} 個を置き直しました。失敗: ${failed.join(' / ')}` }
+        : { ok: true, text: `${rows.length} 個のパネルを置き直しました` });
+    }
+  }
+
+  /* ② ウォレット */
+  if (sec === 'wallet') {
+    if (act === 'pick' && i.isStringSelectMenu()) { s.walletId = Number(i.values[0]); return renderAdmin(i, 'wallet'); }
+    const w = s.walletId !== undefined ? wallets.getWallet(s.walletId) : undefined;
+    if (act === 'enable' || act === 'disable') {
+      if (!w) return renderAdmin(i, 'wallet', { ok: false, text: 'ウォレットを選んでください' });
+      wallets.setEnabled(w.id, act === 'enable');
+      invalidateLiquidityCache();
+      return renderAdmin(i, 'wallet', { ok: true, text: `#${w.id} ${w.label} を${act === 'enable' ? '有効' : '無効'}にしました` });
+    }
+    if (act === 'remove') {
+      if (!w) return renderAdmin(i, 'wallet', { ok: false, text: 'ウォレットを選んでください' });
+      return showAdmin(i, confirmScreen('ウォレットを削除', [`#${w.id} ${w.label} (${w.kind === 'paypay' ? 'PayPay' : 'LTC'}) を削除します`, w.kind === 'paypay' ? 'ログイン情報も消えます' : '自動送金用の鍵も消えます'], 'ap:wallet:removego', 'ap:open:wallet'));
+    }
+    if (act === 'removego') {
+      if (!w) return renderAdmin(i, 'wallet', { ok: false, text: 'ウォレットが見つかりません' });
+      wallets.removeWallet(w.id);
+      s.walletId = undefined;
+      invalidateLiquidityCache();
+      return renderAdmin(i, 'wallet', { ok: true, text: `#${w.id} ${w.label} を削除しました` });
+    }
+    if (act === 'balance') {
+      if (!w) return renderAdmin(i, 'wallet', { ok: false, text: 'PayPay ウォレットを選んでください' });
+      return cmdWallet(asCommand(i, 'balance', { id: w.id }));
+    }
+    if (act === 'refresh') return cmdPaypay(asCommand(i, 'balance'));
+    if (act === 'addpp') return (i as ButtonInteraction).showModal(adminModal('wallet:paypay:start:', 'PayPay を登録', [
+      ['label', '表示名 (例: メイン)'], ['phone', '電話番号 (ハイフン可)'], ['password', 'PayPay のパスワード'],
+    ]));
+    if (act === 'addltc') return (i as ButtonInteraction).showModal(adminModal('ap:wallet:addltcgo', 'LTC を登録', [
+      ['label', '表示名 (例: メイン)'],
+      ['address', '受け取り専用にするならアドレス', { required: false, placeholder: '空欄なら自動送金用のウォレットを新しく作る' }],
+    ]));
+    if (act === 'addltcgo' && i.isModalSubmit()) {
+      const label = i.fields.getTextInputValue('label').trim();
+      const address = i.fields.getTextInputValue('address').trim() || null;
+      return cmdWallet(asCommand(i, 'add-ltc', { label, address }));
+    }
+    if (act === 'transfer') return (i as ButtonInteraction).showModal(adminModal('ap:wallet:transfergo', '利益を引き出す (PayPay)', [
+      ['amount', '金額 (円)'], ['passcode', 'リンクのパスコード (4 桁、任意)', { required: false }],
+    ]));
+    if (act === 'transfergo' && i.isModalSubmit()) {
+      const amount = parseStrictInt(i.fields.getTextInputValue('amount'));
+      if (amount === null) return i.reply({ content: '金額は整数で入力してください', flags: MessageFlags.Ephemeral });
+      const passcode = i.fields.getTextInputValue('passcode').trim() || null;
+      return cmdPaypay(asCommand(i, 'transfer', { amount, wallet: w?.kind === 'paypay' ? w.id : null, passcode }));
+    }
+  }
+
+  /* ③ サーバー管理: NG ワード */
+  if (sec === 'ng') {
+    if (act === 'add') return (i as ButtonInteraction).showModal(adminModal('ap:ng:addgo', 'NG ワードを追加', [['word', '追加する語 (60 文字まで)']]));
+    if (act === 'remove') return (i as ButtonInteraction).showModal(adminModal('ap:ng:removego', 'NG ワードを削除', [['word', '削除する語 (一覧と同じ表記)']]));
+    if (act === 'addgo' && i.isModalSubmit()) {
+      const word = i.fields.getTextInputValue('word').trim();
+      const r = addBannedWord(gid, word, i.user.id);
+      return renderAdmin(i, 'ng', r.added ? { ok: true, text: `「${word}」を追加しました` } : { ok: false, text: `追加できませんでした: ${r.reason}` });
+    }
+    if (act === 'removego' && i.isModalSubmit()) {
+      const word = i.fields.getTextInputValue('word').trim();
+      return renderAdmin(i, 'ng', removeBannedWord(gid, word) ? { ok: true, text: `「${word}」を削除しました` } : { ok: false, text: `「${word}」は登録されていません` });
+    }
+  }
+
+  /* ③ サーバー管理: ユーザー */
+  if (sec === 'user') {
+    if (act === 'pick' && i.isUserSelectMenu()) { s.userId = i.values[0]; return renderAdmin(i, 'user'); }
+    if (!s.userId) return renderAdmin(i, 'user', { ok: false, text: 'ユーザーを選んでください' });
+    const user = await client.users.fetch(s.userId);
+    if (act === 'info')    return cmdAdmin(asCommand(i, 'user', { user }));
+    if (act === 'history') return cmdAdmin(asCommand(i, 'history', { user, type: 'all', limit: 20 }));
+    if (act === 'unban') {
+      await cmdAdmin(asCommand(i, 'unban', { user }));
+      return;
+    }
+    if (act === 'ban') return (i as ButtonInteraction).showModal(adminModal('ap:user:bango', `BAN: ${user.username}`, [['reason', '理由 (任意)', { required: false }]]));
+    if (act === 'bango' && i.isModalSubmit()) {
+      return cmdAdmin(asCommand(i, 'ban', { user, reason: i.fields.getTextInputValue('reason').trim() || null }));
+    }
+    if (act === 'grant') return (i as ButtonInteraction).showModal(adminModal(`ap:user:grantgo:${arg}`, `chip 付与 (${arg === 'pp' ? 'PayPay' : 'LTC'} 由来)`, [
+      ['amount', '金額 (マイナスで減らす)', { placeholder: '例: 1000 / -500' }], ['reason', '理由 (任意)', { required: false }],
+    ]));
+    if (act === 'grantgo' && i.isModalSubmit()) {
+      const amount = parseStrictInt(i.fields.getTextInputValue('amount'));
+      if (amount === null || amount === 0) return i.reply({ content: '金額は 0 以外の整数で入力してください', flags: MessageFlags.Ephemeral });
+      return cmdAdmin(asCommand(i, 'grant', { user, rail: arg === 'ltc' ? 'ltc' : 'pp', amount, reason: i.fields.getTextInputValue('reason').trim() || null }));
+    }
+    if (act === 'sendpp') return (i as ButtonInteraction).showModal(adminModal('ap:user:sendppgo', `PayPay 手動送金: ${user.username}`, [
+      ['amount', '金額 (円)'], ['passcode', 'リンクのパスコード (4 桁、任意)', { required: false }], ['reason', '理由 (任意)', { required: false }],
+    ]));
+    if (act === 'sendppgo' && i.isModalSubmit()) {
+      const amount = parseStrictInt(i.fields.getTextInputValue('amount'));
+      if (amount === null) return i.reply({ content: '金額は整数で入力してください', flags: MessageFlags.Ephemeral });
+      return cmdAdmin(asCommand(i, 'send-paypay', { user, amount, passcode: i.fields.getTextInputValue('passcode').trim() || null, reason: i.fields.getTextInputValue('reason').trim() || null }));
+    }
+    if (act === 'sendltc') return (i as ButtonInteraction).showModal(adminModal('ap:user:sendltcgo', `LTC 手動送金: ${user.username}`, [
+      ['dest', '送金先の LTC アドレス'], ['ltc', '送る量 (LTC)', { placeholder: '例: 0.05' }], ['reason', '理由 (任意)', { required: false }],
+    ]));
+    if (act === 'sendltcgo' && i.isModalSubmit()) {
+      const ltc = Number(i.fields.getTextInputValue('ltc').trim());
+      if (!Number.isFinite(ltc) || ltc <= 0) return i.reply({ content: 'LTC の量は 0 より大きい数で入力してください', flags: MessageFlags.Ephemeral });
+      return cmdAdmin(asCommand(i, 'send-ltc', { user, dest: i.fields.getTextInputValue('dest').trim(), ltc, reason: i.fields.getTextInputValue('reason').trim() || null }));
+    }
+  }
+
+  /* ③ サーバー管理: 運営データ */
+  if (sec === 'ops') {
+    if (act === 'stats')    return cmdAdmin(asCommand(i, 'stats'));
+    if (act === 'pending')  return cmdAdmin(asCommand(i, 'pending', { method: null, limit: 10 }));
+    if (act === 'deposits') return replyRecentDeposits(i);
+    if (act === 'achch' && i.isChannelSelectMenu()) {
+      const ch = i.channels.first();
+      if (!ch || !('name' in ch)) return renderAdmin(i, 'ops', { ok: false, text: 'チャンネルを選んでください' });
+      const base = (ch.name ?? 'achievements').replace(/[-_ー]実績\d+件$/, '');
+      ach.setConfig(gid, ch.id, base);
+      try {
+        const fetched = await client.channels.fetch(ch.id);
+        if (fetched && 'setName' in fetched) await (fetched as any).setName(ach.formatChannelName(base, ach.countAchievements(gid)));
+      } catch { /* 名前の変更は頻度制限に当たることがある */ }
+      return renderAdmin(i, 'ops', { ok: true, text: `当選告知の投稿先を <#${ch.id}> にしました` });
+    }
+    if (act === 'achoff') {
+      ach.setConfig(gid, null, null);
+      return renderAdmin(i, 'ops', { ok: true, text: '当選告知を止めました' });
+    }
   }
 }
 
@@ -1103,6 +1250,7 @@ async function onWithdrawUserButton(i: ButtonInteraction, kind: string) {
 }
 
 async function onSelect(i: StringSelectMenuInteraction) {
+  if (i.customId.startsWith('ap:')) return onAdminPanel(i);
   if (i.customId.startsWith('t:') || i.customId.startsWith('cr:add')) return onTableSelect(i);
   // 以前のルーレット画面に残っている掛け方メニュー: 新しいテーブルを開き直す
   if (i.customId === 'rou:select') return openTable(i as unknown as ButtonInteraction, 'roulette');
@@ -1239,6 +1387,7 @@ async function onModal(i: ModalSubmitInteraction) {
     return i.reply({ content: `\`\`\`\n${converted}\n\`\`\``, flags: MessageFlags.Ephemeral });
   }
   if (i.customId.startsWith('t:')) return onTableModal(i);
+  if (i.customId.startsWith('ap:')) return onAdminPanel(i);
   if (i.customId === 'dep:ltc' || i.customId.startsWith('dep:ltc:')) {
     assertNotBanned(i.user.id);
     const raw = i.fields.getTextInputValue('jpy').replace(/[,\s¥]/g, '');
@@ -1321,7 +1470,7 @@ async function onModal(i: ModalSubmitInteraction) {
   if (i.customId.startsWith('wallet:paypay:start:')) {
     if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
       return i.reply({ content: '権限不足', flags: MessageFlags.Ephemeral });
-    const label = decodeURIComponent(i.customId.split(':')[3]);
+    const label = decodeURIComponent(i.customId.split(':')[3] ?? '') || i.fields.getTextInputValue('label').trim() || 'PayPay';
     const phone = i.fields.getTextInputValue('phone');
     const password = i.fields.getTextInputValue('password');
     await i.deferReply({ flags: MessageFlags.Ephemeral });
