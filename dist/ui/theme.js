@@ -1,0 +1,59 @@
+/**
+ * パネルの見た目の共通部品。色は 黒 / シルバー / 紫 / 青紫 の 4 色だけを使う。
+ *
+ * Discord の embed は、タイトル・項目名・フッターではアプリ絵文字が表示されない。
+ * そのため見出しや区切りはすべて本文 (description) に書く。
+ */
+import { EmbedBuilder } from 'discord.js';
+import { emoji } from './emoji-ids.js';
+export const COLOR = {
+    black: 0x0b0b12,
+    silver: 0xb8b8c4,
+    purple: 0x7c3aed,
+    violet: 0x4f46e5, // 紫寄りの青
+};
+/** 絵文字。未登録なら代わりの文字 (無ければ空)。 */
+export const e = (name, fallback = '') => emoji(name) || fallback;
+export const ICON = {
+    fire: () => e('deco_fire'),
+    crown: () => e('ui_crown', '◆'),
+    arrow: () => e('ui_arrow', '▸'),
+    sparkle: () => e('ui_sparkle'),
+    check: () => e('ui_check', '✓'),
+    chip: () => e('ui_chip'),
+    wallet: () => e('ui_wallet'),
+    balance: () => e('ui_balance'),
+    paypay: () => e('pay_paypay'),
+    ltc: () => e('pay_ltc'),
+};
+export const GAME_ICON = {
+    blackjack: () => e('game_blackjack'),
+    slots: () => e('game_slots'),
+    roulette: () => e('game_roulette'),
+    baccarat: () => e('game_baccarat'),
+    videopoker: () => e('game_videopoker'),
+    craps: () => e('game_craps'),
+};
+/** 箇条書き 1 行 */
+export const bullet = (s) => `${ICON.arrow()} ${s}`;
+/**
+ * 全パネル共通の組み立て:
+ *   # (アイコン) 名前
+ *   (炎) ひとこと (炎)
+ *   ### (印) 見出し
+ *   (矢印) 箇条書き …
+ */
+export function panelEmbed(opts) {
+    const fire = ICON.fire();
+    const head = [
+        `# ${opts.icon ? `${opts.icon} ` : ''}${opts.title}`,
+        fire ? `${fire} ${opts.tagline} ${fire}` : opts.tagline,
+    ];
+    const body = opts.sections.map(s => [`### ${s.icon ?? ICON.crown()} ${s.title}`, ...s.lines.map(bullet)].join('\n'));
+    const embed = new EmbedBuilder()
+        .setColor(opts.color ?? COLOR.purple)
+        .setDescription([head.join('\n'), ...body].join('\n\n').slice(0, 4096));
+    if (opts.footer)
+        embed.setFooter({ text: opts.footer });
+    return embed;
+}

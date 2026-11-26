@@ -99,7 +99,7 @@ const SLOT_EMOJI_NAME: Record<string, string> = {
   '🍉': 'slot_melon',   '⭐': 'slot_star',  '🔔': 'slot_bell',
   '💎': 'slot_diamond', '7️⃣': 'slot_seven',
 };
-function slotEmoji(s: SlotSym): string {
+export function slotEmoji(s: SlotSym): string {
   const name = SLOT_EMOJI_NAME[s.id];
   return (name && emoji(name)) || s.id;
 }

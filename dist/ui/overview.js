@@ -1,7 +1,8 @@
-import { EmbedBuilder } from 'discord.js';
 import { SYMBOLS } from '../games/slots.js';
 import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY, MIN_BET_CHIPS, MAX_BET_CHIPS, LTC_NETWORK_FEE_JPY } from '../payments/limits.js';
 import { L } from './leet.js';
+import { slotEmoji } from './format-games.js';
+import { COLOR, GAME_ICON, ICON, panelEmbed } from './theme.js';
 /** スロットの実 RTP を重みから計算 */
 export function computeSlotsRTP() {
     const total = SYMBOLS.reduce((s, x) => s + x.w, 0);
@@ -23,194 +24,175 @@ export function computeSlotsRTP() {
     const rtp = rtp3 + ret2c;
     return { rtp, rtp3, ret2c, prob2c, lines3, totalWeight: total };
 }
-function depositLine() {
-    return `PayPay: **¥${MIN_DEPOSIT_JPY.paypay.toLocaleString()}** 〜  /  LTC: **¥${MIN_DEPOSIT_JPY.ltc.toLocaleString()}** 〜`;
+const yen = (n) => `¥${n.toLocaleString()}`;
+const pct = (x, d = 2) => `${(x * 100).toFixed(d)}%`;
+const NAME = {
+    blackjack: L('BLACKJACK'), slots: L('SLOTS'), roulette: L('ROULETTE'),
+    baccarat: L('BACCARAT'), videopoker: L('VIDEO POKER'), craps: L('CRAPS'),
+};
+const betRange = (g) => `BET ${yen(MIN_BET_CHIPS[g])} 〜 ${yen(MAX_BET_CHIPS[g])}${g === 'craps' ? ' (1 つの賭けごと)' : ''}`;
+const HOWTO_TABLE = [
+    'PLAY で自分専用のテーブルが開く',
+    'BET 額を決めて BET。次からは BET を押すだけ',
+    '½・2×・金額変更で BET 額を調整',
+];
+function info(g) {
+    switch (g) {
+        case 'blackjack': return {
+            tagline: 'ディーラーより 21 に近づけたら勝ち',
+            rules: [
+                '6 デッキ。毎ゲーム暗号学的乱数でシャッフル',
+                'ディーラーはソフト 17 でもヒット (H17)',
+                'ダブルは最初の 2 枚のときだけ',
+                'スプリットは同じ数字の 2 枚で、最大 4 ハンドまで',
+                'インシュランス・サレンダーはなし',
+            ],
+            payouts: ['ブラックジャック **×2.5**', '勝ち **×2**', '引き分け **×1** (BET 返却)'],
+            rtp: ['還元率 約 **99.5%** (基本戦略どおりに打った場合の参考値)'],
+            howto: HOWTO_TABLE,
+        };
+        case 'slots': {
+            const r = computeSlotsRTP();
+            const hit = r.lines3.reduce((s, l) => s + l.prob, 0) + r.prob2c;
+            const jackpot = (SYMBOLS[SYMBOLS.length - 1].w / r.totalWeight) ** 3;
+            const cherry = slotEmoji(SYMBOLS[0]);
+            return {
+                tagline: '同じ絵柄が 3 つそろえば当たり',
+                rules: ['3 リール。各リールは独立して止まる', `左 2 つが ${cherry} でも当たり`],
+                payouts: [
+                    ...[...SYMBOLS].sort((a, b) => b.pay3 - a.pay3).map(s => `${slotEmoji(s).repeat(3)}  **×${s.pay3.toLocaleString()}**`),
+                    `${cherry}${cherry} + 何でも  **×${SYMBOLS[0].pay2}**`,
+                ],
+                odds: [
+                    `当たり 約 **${(1 / hit).toFixed(1)} 回に 1 回** (${pct(hit)})`,
+                    `${slotEmoji(SYMBOLS[SYMBOLS.length - 1]).repeat(3)} 約 **${Math.round(1 / jackpot).toLocaleString()} 回に 1 回**`,
+                ],
+                rtp: [`還元率 **${pct(r.rtp)}** (配当と出現率から計算)`],
+                howto: HOWTO_TABLE,
+            };
+        }
+        case 'roulette': return {
+            tagline: '0〜36 のどこにボールが止まるかを当てる',
+            rules: ['ヨーロピアン (0 が 1 つだけ)', '掛け方はテーブルで選ぶ'],
+            payouts: [
+                '赤 / 黒 / 奇数 / 偶数 / 1–18 / 19–36  **×2**',
+                'ダズン (1–12 / 13–24 / 25–36)  **×3**',
+                '数字 1 つ (0〜36)  **×36**',
+            ],
+            odds: [`×2 の掛け方 **${pct(18 / 37)}**`, `ダズン **${pct(12 / 37)}**`, `数字 1 つ **${pct(1 / 37)}**`],
+            rtp: [`還元率 **${pct(36 / 37)}** (どの掛け方も同じ)`],
+            howto: HOWTO_TABLE,
+        };
+        case 'baccarat': return {
+            tagline: 'Player と Banker、9 に近い方を当てる',
+            rules: [
+                '6 デッキ。標準ルール (Punto Banco)',
+                '合計は下 1 桁 (14 → 4)。8・9 はナチュラルでそこで決着',
+                '3 枚目は標準の引きルールで自動',
+                'タイのときは Player・Banker への BET は返金',
+            ],
+            payouts: ['Player **×2**', 'Banker **×1.95** (5% 手数料)', 'Tie **×9**'],
+            odds: ['Player 勝ち **44.62%**', 'Banker 勝ち **45.86%**', 'Tie **9.52%**'],
+            rtp: ['還元率 Banker **98.94%** / Player **98.76%** / Tie **85.6%**'],
+            howto: HOWTO_TABLE,
+        };
+        case 'videopoker': return {
+            tagline: '5 枚で役を作る。Jacks or Better',
+            rules: ['最初に 5 枚配られる', '残すカードを HOLD して、DRAW で 1 回だけ引き直す', 'J 以上のワンペアから当たり'],
+            payouts: [
+                'ロイヤルフラッシュ **×800**', 'ストレートフラッシュ **×50**', 'フォーカード **×25**',
+                'フルハウス **×9**', 'フラッシュ **×6**', 'ストレート **×4**',
+                'スリーカード **×3**', 'ツーペア **×2**', 'J 以上のワンペア **×1**',
+            ],
+            rtp: ['還元率 **99.54%** (最適な打ち方をした場合)'],
+            howto: [HOWTO_TABLE[0], 'BET → 残すカードを HOLD → DRAW', HOWTO_TABLE[2]],
+        };
+        case 'craps': return {
+            tagline: '2 つのサイコロの合計で勝負',
+            rules: [
+                'カムアウト: 7・11 で Pass 勝ち / 2・3・12 で負け / それ以外はポイント成立',
+                'ポイント中: ポイントが先に出れば Pass 勝ち、7 が先なら負け',
+                '1 つの台に複数の賭けを置ける',
+            ],
+            payouts: [
+                "Pass / Don't Pass / Come / Don't Come  **×2**",
+                'Odds  **真の確率どおり** (ハウスエッジなし)',
+                'Place 4・10 **×2.8** / 5・9 **×2.4** / 6・8 **×2.17**',
+                'Hard 4・10 **×8** / Hard 6・8 **×10**',
+                'Field **×2** (2・12 は **×3**)',
+                'Any 7 **×5** / Any Craps **×8** / Yo 11 **×16** / 2・12 **×31**',
+            ],
+            rtp: ["主な還元率: Pass **98.59%** / Don't Pass **98.64%** / Place 6・8 **98.48%** / Field **97.22%** / Any 7 **83.33%**"],
+            howto: ['PLAY で自分専用の台が開く', '賭けの種類を選ぶと、今の BET 額で台に置かれる', 'ROLL でサイコロを振る'],
+        };
+    }
 }
-export function blackjackOverview() {
-    return new EmbedBuilder()
-        .setTitle(`🂡  ${L('BLACKJACK')} — ${L('OVERVIEW')}`)
-        .setColor(0x0d5a3a)
-        .setDescription('ラスベガスルール準拠のブラックジャック。6デッキシュー、暗号学的乱数で毎局シャッフル。')
-        .addFields({ name: '🎯 Rules', value: '• 6-deck shoe / crypto RNG シャッフル\n' +
-            '• ディーラーは **ソフト17 で hit (H17)**\n' +
-            '• Blackjack は **3:2** 配当\n' +
-            '• Double 可 (最初の2枚のみ, bet2倍で1枚のみ追加)\n' +
-            '• Split 可 (同ランク2枚, 最大4ハンドまで)\n' +
-            '• Insurance / Surrender なし',
-        inline: false }, { name: '💰 Payouts', value: '`Blackjack`  × **2.5** (純利 +1.5x)\n' +
-            '`Win`         × **2.0** (純利 +1x)\n' +
-            '`Push`        × **1.0** (bet 返却)\n' +
-            '`Lose`        × **0**',
-        inline: false }, { name: '📊 RTP', value: '**RTP ≈ 99.5%**  /  House edge ≈ 0.5%\n' +
-            'ベーシックストラテジー通りに打った場合の参考値。',
-        inline: false }, { name: '📐 Bet range', value: `**${MIN_BET_CHIPS.blackjack.toLocaleString()}** 〜 **${MAX_BET_CHIPS.blackjack.toLocaleString()}** ${L('chips')}`, inline: true }, { name: '💳 最低入金額', value: depositLine(), inline: false })
-        .setFooter({ text: 'Discord C4sino · Blackjack Overview' });
+const depositLines = () => [
+    `${ICON.paypay()} PayPay **${yen(MIN_DEPOSIT_JPY.paypay)}** 〜`,
+    `${ICON.ltc()} LTC **${yen(MIN_DEPOSIT_JPY.ltc)}** 〜`,
+];
+/** チャンネルに置くゲームのパネル (ボタンは panels.ts で付ける) */
+export function gamePanelEmbed(g) {
+    const x = info(g);
+    return panelEmbed({
+        icon: GAME_ICON[g](), title: NAME[g], tagline: x.tagline, footer: `C4sino · ${NAME[g]}`,
+        sections: [
+            { title: 'ルール', lines: x.rules },
+            { icon: ICON.chip(), title: '配当', lines: x.payouts },
+            { icon: ICON.balance(), title: 'BET と還元率', lines: [betRange(g), ...x.rtp] },
+            { icon: ICON.sparkle(), title: '遊び方', lines: x.howto },
+        ],
+    });
 }
-export function slotsOverview() {
-    const r = computeSlotsRTP();
-    const pct = (x) => `${(x * 100).toFixed(4)}%`;
-    const cents = (x) => `${(x * 100).toFixed(2)}%`;
-    const lines = r.lines3
-        .sort((a, b) => b.pay - a.pay)
-        .map(l => `\`${l.sym}×3\` — **×${l.pay}**  p=${pct(l.prob)}`)
-        .join('\n');
-    const sumWinProb = r.lines3.reduce((s, l) => s + l.prob, 0) + r.prob2c;
-    const hitFreq = 1 / sumWinProb;
-    const jackpotP = (SYMBOLS[7].w / r.totalWeight) ** 3;
-    return new EmbedBuilder()
-        .setTitle(`🎰  ${L('SLOTS')} — ${L('OVERVIEW')}`)
-        .setColor(0x2d0a4e)
-        .setDescription('3リール・8シンボルのクラシックスロット。各リール独立に重み付き抽選。')
-        .addFields({ name: '💎 Payouts (3-of-a-kind)', value: lines, inline: false }, { name: '🍒 Side line',
-        value: `\`🍒🍒?\` (左2つがチェリー) — **×${SYMBOLS[0].pay2}**  p=${pct(r.prob2c)}`,
-        inline: false }, { name: '📊 RTP',
-        value: `**RTP = ${(r.rtp * 100).toFixed(2)}%**  (House edge ${(100 - r.rtp * 100).toFixed(2)}%)\n` +
-            `3-of-a-kind ${cents(r.rtp3)}  /  2-cherry ${cents(r.ret2c)}`,
-        inline: false }, { name: '🎯 Hit frequency',
-        value: `約 **${hitFreq.toFixed(1)} 回に 1 回** (${(sumWinProb * 100).toFixed(2)}%)\n` +
-            `🏆 JACKPOT 7️⃣×3: 約 ${Math.round(1 / jackpotP).toLocaleString()} 回に 1 回`,
-        inline: false }, { name: '📐 Bet range', value: `**${MIN_BET_CHIPS.slots.toLocaleString()}** 〜 **${MAX_BET_CHIPS.slots.toLocaleString()}** ${L('chips')}`, inline: true }, { name: '💳 最低入金額', value: depositLine(), inline: false })
-        .setFooter({ text: 'Discord C4sino · Slots Overview' });
-}
-export function rouletteOverview() {
-    return new EmbedBuilder()
-        .setTitle(`🎡  ${L('EUROPEAN')} ${L('ROULETTE')} — ${L('OVERVIEW')}`)
-        .setColor(0x0d5a3a)
-        .setDescription('0〜36 の 37 ポケットのホイールにボールが転がり、停止ポケットで勝敗が決まる。' +
-        'ヨーロピアン型は 0 のみ（アメリカン型の 00 なし）で RTP が高い。')
-        .addFields({ name: '💰 Payouts', value: '**Outside Bets (低リスク)**\n' +
-            '🟥 Red / ⬛ Black / Odd / Even / 1–18 / 19–36  → **×2**\n' +
-            '**Dozen / Column**\n' +
-            '1st12 / 2nd12 / 3rd12 / Col1 / Col2 / Col3  → **×3**\n' +
-            '**Inside Bet (高リスク)**\n' +
-            'Straight-up (単一数字 0–36)  → **×36**',
-        inline: false }, { name: '📊 RTP', value: '**97.30%**  (House edge 2.70%)\nすべてのベット種別で同じ RTP。', inline: false }, { name: '🎯 Odds', value: 'Red/Black/Odd/Even/1–18/19–36: **48.65%**\nDozen/Column: **32.43%**\nStraight-up: **2.70%**',
-        inline: false }, { name: '📐 Bet range', value: `**10** 〜 **50,000** ${L('chips')}`, inline: true }, { name: '💳 最低入金額', value: depositLine(), inline: false })
-        .setFooter({ text: 'Discord C4sino · Roulette Overview' });
-}
-export function baccaratOverview() {
-    return new EmbedBuilder()
-        .setTitle(`🎴  ${L('BACCARAT')} — ${L('OVERVIEW')}`)
-        .setColor(0x0d5a3a)
-        .setDescription('Punto Banco (標準) ルール。6-デッキシュー。')
-        .addFields({ name: '🎯 Rules', value: '• Player / Banker にそれぞれ 2 枚ずつ配る\n' +
-            '• 合計 8-9 はナチュラル (そのまま決着)\n' +
-            '• Player: 0–5 で 3 枚目ドロー、6–7 でスタンド\n' +
-            '• Banker: Player の 3 枚目に応じた標準テーブル\n' +
-            '• 合計点は下一桁 (14 → 4)',
-        inline: false }, { name: '💰 Payouts', value: `${L('Player')}: **×2.0** (勝率 44.62%)\n` +
-            `${L('Banker')}: **×1.95** (勝率 45.86%, 5% コミ)\n` +
-            `${L('Tie')}: **×9.0** (発生率 9.52%)`,
-        inline: false }, { name: '📊 House edge', value: 'Banker **1.06%** / Player **1.24%** / Tie **14.4%**', inline: false }, { name: '📐 Bet range', value: `**10** 〜 **50,000** ${L('chips')}`, inline: true }, { name: '💳 最低入金額', value: depositLine(), inline: false })
-        .setFooter({ text: 'Discord C4sino · Baccarat Overview' });
-}
-export function videopokerOverview() {
-    return new EmbedBuilder()
-        .setTitle(`🃏  ${L('VIDEO POKER')} — ${L('OVERVIEW')}`)
-        .setColor(0x2d0a4e)
-        .setDescription('Jacks or Better (9/6 標準)。5 枚の初手から HOLD を選んで DRAW。')
-        .addFields({ name: '💰 Paytable (per 1 bet)', value: '`Royal Flush        ×800`\n' +
-            '`Straight Flush     ×50`\n' +
-            '`Four of a Kind     ×25`\n' +
-            '`Full House         ×9`\n' +
-            '`Flush              ×6`\n' +
-            '`Straight           ×4`\n' +
-            '`Three of a Kind    ×3`\n' +
-            '`Two Pair           ×2`\n' +
-            '`Jacks or Better    ×1`',
-        inline: false }, { name: '📊 RTP', value: '**99.54%** (最適プレイ時, 9/6 Jacks)', inline: false }, { name: '📐 Bet range', value: `**10** 〜 **50,000** ${L('chips')}`, inline: true }, { name: '💳 最低入金額', value: depositLine(), inline: false })
-        .setFooter({ text: 'Discord C4sino · Video Poker Overview' });
-}
-export function crapsOverview() {
-    return new EmbedBuilder()
-        .setTitle(`🎲  ${L('CRAPS')} — ${L('OVERVIEW')}`)
-        .setColor(0x0d5a3a)
-        .setDescription('2 個のダイスで進行するマルチロール式ゲーム。Come-out → Point phase を繰り返す。')
-        .addFields({ name: '🎯 Phase', value: '**Come-out roll**  7/11=Pass勝, 2/3/12=Pass負, 4-10=Point成立\n' +
-            '**Point phase**   Point再出=Pass勝, 7=Seven-out (負)',
-        inline: false }, { name: '💰 Line Bets (House edge 低)', value: 'Pass **×2** (edge 1.41%) / Don\'t Pass **×2** (edge 1.36%)\n' +
-            'Come / Don\'t Come も同等\n' +
-            'Pass Odds / Don\'t Pass Odds は **真の確率** (edge 0%)',
-        inline: false }, { name: '💰 Place / Hardways', value: 'Place 4/10 **×2.8** (edge 6.67%) / 5/9 **×2.4** (4.0%) / 6/8 **×2.17** (1.52%)\n' +
-            'Hard 4/10 **×8** (edge 11.11%) / Hard 6/8 **×10** (9.09%)',
-        inline: false }, { name: '💰 Props (ワンロール, 高エッジ)', value: 'Field (3-11) **×2** / (2,12) **×3** (edge 2.78%)\n' +
-            'Any 7 **×5** (edge 16.67%) / Any Craps **×8** (11.11%)\n' +
-            'Yo 11 **×16** (11.11%)\n' +
-            'Snake Eyes (2) **×31** (13.89%) / Boxcars (12) **×31** (13.89%)',
-        inline: false }, { name: '📐 Bet range', value: `**10** 〜 **50,000** ${L('chips')} (各ベット)`, inline: true }, { name: '💳 最低入金額', value: depositLine(), inline: false })
-        .setFooter({ text: 'Discord C4sino · Craps Overview' });
-}
-export function cashierOverview() {
-    return new EmbedBuilder()
-        .setTitle('💵  CASHIER — 入出金について')
-        .setColor(0xd4af37)
-        .setDescription('**1 chip = ¥1 の内部通貨**。入金で発行、出金で焼却。')
-        .addFields({ name: '📥 PayPay 入金',
-        value: `最低 **¥${MIN_DEPOSIT_JPY.paypay.toLocaleString()}** / 即チャージ\n` +
-            'PayPay アプリで発行した送金リンクを貼るだけで Bot が自動受領。',
-        inline: false }, { name: '📥 LTC 入金',
-        value: `最低 **¥${MIN_DEPOSIT_JPY.ltc.toLocaleString()}** / 1 承認 (2-5分)\n` +
-            '専用アドレス発行、送金後に自動チャージ。CoinGecko レート換算。',
-        inline: false }, { name: '📤 PayPay 出金',
-        value: `最低 **¥${MIN_WITHDRAW_JPY.paypay.toLocaleString()}** / 手数料 **無料** / 即時\n` +
-            'Bot が送金リンクを生成し、DM で送信します。パスコード設定可。',
-        inline: false }, { name: '📤 LTC 出金',
-        value: `最低 **¥${MIN_WITHDRAW_JPY.ltc.toLocaleString()}** / 手数料 ¥${LTC_NETWORK_FEE_JPY}\n` +
-            '任意の LTC アドレスへ送金。管理者承認後、ネットワーク反映は数分〜十数分。',
-        inline: false })
-        .setFooter({ text: 'Discord C4sino · Cashier Overview' });
-}
-export function allOverview() {
-    const s = computeSlotsRTP();
-    return new EmbedBuilder()
-        .setTitle('🎲 C4sino — Game Overview')
-        .setColor(0xd4af37)
-        .setDescription('各ゲームの概要と期待値。詳細は管理者が個別パネルを設置します。')
-        .addFields({ name: `🂡 ${L('BLACKJACK')}`,
-        value: '6-deck / H17 / BJ 3:2 / Split 最大4 / Double 可\n' +
-            `**RTP ≈ 99.5%**  (House edge 0.5%)\n` +
-            `Bet: ${MIN_BET_CHIPS.blackjack.toLocaleString()} 〜 ${MAX_BET_CHIPS.blackjack.toLocaleString()} ${L('chips')}`,
-        inline: false }, { name: `🎰 ${L('SLOTS')}`,
-        value: '3リール / 8シンボル / 重み付き独立抽選\n' +
-            `**RTP ≈ ${(s.rtp * 100).toFixed(2)}%**  (House edge ${(100 - s.rtp * 100).toFixed(2)}%)\n` +
-            `Max: 7️⃣×3 ×2300 / Bet: ${MIN_BET_CHIPS.slots.toLocaleString()} 〜 ${MAX_BET_CHIPS.slots.toLocaleString()} ${L('chips')}`,
-        inline: false }, { name: `🎡 ${L('ROULETTE')}`,
-        value: 'European single-zero / 37 ポケット\n' +
-            '**RTP = 97.30%**  (House edge 2.70%)\n' +
-            `Max: Straight-up ×36 / Bet: 10 〜 50,000 ${L('chips')}`,
-        inline: false }, { name: `🎴 ${L('BACCARAT')}`,
-        value: 'Punto Banco / Player / Banker / Tie\n' +
-            '**House edge 1.06%** (Banker)\n' +
-            `Max: Tie ×9 / Bet: 10 〜 50,000 ${L('chips')}`,
-        inline: false }, { name: `🃏 ${L('VIDEO POKER')}`,
-        value: 'Jacks or Better 9/6, 5-card draw\n' +
-            '**RTP ≈ 99.54%** (最適プレイ時)\n' +
-            `Max: Royal Flush ×800 / Bet: 10 〜 50,000 ${L('chips')}`,
-        inline: false }, { name: `🎲 ${L('CRAPS')}`,
-        value: 'マルチロール式 (Come-out → Point)\n' +
-            '**Pass Line edge 1.41%**  /  Odds は 0%\n' +
-            `Max: 30:1 (Snake Eyes / Boxcars) / Bet: 10 〜 50,000 ${L('chips')}`,
-        inline: false }, { name: '💳 最低入金額', value: depositLine(), inline: false }, { name: '📒 用語',
-        value: '**RTP** (Return to Player): 長期払戻し率。100% を下回る分がハウスの取り分。\n' +
-            '**House edge**: 1 − RTP。例えば 0.5% なら ¥10,000 賭けると期待損失 ¥50。\n' +
-            '**Variance**: 短期は RTP から大きくブレる。資金管理が重要。',
-        inline: false })
-        .setFooter({ text: 'Discord C4sino · Overview' });
-}
+/** /setup type:overview のルール説明パネル */
 export function gameOverview(game) {
-    if (game === 'blackjack')
-        return blackjackOverview();
-    if (game === 'slots')
-        return slotsOverview();
-    if (game === 'roulette')
-        return rouletteOverview();
-    if (game === 'baccarat')
-        return baccaratOverview();
-    if (game === 'videopoker')
-        return videopokerOverview();
-    if (game === 'craps')
-        return crapsOverview();
     if (game === 'cashier')
-        return cashierOverview();
-    return allOverview();
+        return cashierEmbed('C4sino · 入出金のルール');
+    if (game === 'all')
+        return allOverview();
+    const x = info(game);
+    const sections = [
+        { title: 'ルール', lines: x.rules },
+        { icon: ICON.chip(), title: '配当', lines: x.payouts },
+    ];
+    if (x.odds)
+        sections.push({ icon: ICON.sparkle(), title: '確率', lines: x.odds });
+    sections.push({ icon: ICON.balance(), title: 'BET と還元率', lines: [betRange(game), ...x.rtp] }, { icon: ICON.wallet(), title: '最低入金額', lines: depositLines() });
+    return panelEmbed({ icon: GAME_ICON[game](), title: NAME[game], tagline: x.tagline, sections, footer: `C4sino · ${NAME[game]} のルール` });
+}
+/** 入出金のパネル (Cashier) と、そのルール説明 */
+export function cashierEmbed(footer = 'C4sino · Cashier') {
+    return panelEmbed({
+        icon: ICON.wallet(), title: L('CASHIER'), tagline: '1 chip = ¥1。入金して遊び、勝った分は出金', color: COLOR.violet, footer,
+        sections: [
+            { icon: ICON.balance(), title: '残高のしくみ', lines: [
+                    '1 chip = ¥1。入金で増え、出金で減る',
+                    '残高は PayPay 由来 と LTC 由来 に分けて管理',
+                    '出金は、入金した方法の分まで (PayPay で入れた分は PayPay で)',
+                ] },
+            { icon: ICON.paypay(), title: 'PayPay', lines: [
+                    `入金: 送金リンクを貼るだけで即反映 (**${yen(MIN_DEPOSIT_JPY.paypay)}** 〜)`,
+                    `出金: 手数料無料。送金リンクを DM で受け取り (**${yen(MIN_WITHDRAW_JPY.paypay)}** 〜)`,
+                ] },
+            { icon: ICON.ltc(), title: 'LTC', lines: [
+                    `入金: 専用アドレスに送金、1 承認で自動反映 (**${yen(MIN_DEPOSIT_JPY.ltc)}** 〜)`,
+                    `出金: 指定アドレスへ送金、手数料 ${yen(LTC_NETWORK_FEE_JPY)} (**${yen(MIN_WITHDRAW_JPY.ltc)}** 〜)`,
+                    'レートは CoinGecko の現在値で円に換算',
+                ] },
+        ],
+    });
+}
+/** 全ゲームの概要を 1 枚に */
+function allOverview() {
+    const games = ['blackjack', 'slots', 'roulette', 'baccarat', 'videopoker', 'craps'];
+    return panelEmbed({
+        icon: ICON.crown(), title: L('C4SINO'), tagline: '全ゲームの概要', footer: 'C4sino · 全ゲームの概要',
+        sections: [
+            ...games.map(g => {
+                const x = info(g);
+                return { icon: GAME_ICON[g](), title: NAME[g], lines: [x.tagline, `${betRange(g)} / ${x.rtp[0].replace(/^主な/, '')}`] };
+            }),
+            { icon: ICON.wallet(), title: '最低入金額', lines: depositLines() },
+        ],
+    });
 }

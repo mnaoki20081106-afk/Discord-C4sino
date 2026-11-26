@@ -21,7 +21,10 @@ import { formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVid
 import { bjActionsRow } from './ui/panels.js';
 import { housePayoutCap, clampPayout, setCrapsExposure, clearCrapsExposure } from './payments/liquidity.js';
 import * as ach from './achievements.js';
+import { MIN_BET_CHIPS, MAX_BET_CHIPS } from './payments/limits.js';
 import { L } from './ui/leet.js';
+import { emojiRef } from './ui/emoji-ids.js';
+import { COLOR, GAME_ICON } from './ui/theme.js';
 export const GAMES = ['blackjack', 'slots', 'roulette', 'baccarat', 'videopoker', 'craps'];
 export const isGame = (s) => GAMES.includes(s);
 let client = null;
@@ -29,14 +32,8 @@ export function setTablesClient(c) { client = c; }
 /* ────────────── 共通定数 ────────────── */
 /** テストプレイで払戻しを計算するための仮 BET。残高からは引かれない。 */
 export const TEST_BET = 100;
-export const BET_LIMITS = {
-    blackjack: { min: 10, max: 50_000 },
-    slots: { min: 10, max: 10_000 },
-    roulette: { min: 10, max: 50_000 },
-    baccarat: { min: 10, max: 50_000 },
-    videopoker: { min: 10, max: 50_000 },
-    craps: { min: 10, max: 50_000 },
-};
+export const BET_LIMITS = Object.fromEntries(['blackjack', 'slots', 'roulette', 'baccarat', 'videopoker', 'craps']
+    .map(g => [g, { min: MIN_BET_CHIPS[g], max: MAX_BET_CHIPS[g] }]));
 const TITLE = {
     blackjack: `🂡 ${L('BLACKJACK')}`,
     slots: `🎰 ${L('SLOTS')}`,
@@ -45,6 +42,15 @@ const TITLE = {
     videopoker: `🃏 ${L('VIDEO POKER')}`,
     craps: `🎲 ${L('CRAPS')}`,
 };
+const NAME = {
+    blackjack: L('BLACKJACK'), slots: L('SLOTS'), roulette: L('ROULETTE'),
+    baccarat: L('BACCARAT'), videopoker: L('VIDEO POKER'), craps: L('CRAPS'),
+};
+/** 登録済みのアプリ絵文字があればボタンに付ける。 */
+function withEmoji(b, name) {
+    const ref = emojiRef(name);
+    return ref ? b.setEmoji(ref) : b;
+}
 const ROU_KINDS = [
     ['red', 'Red (×2)', '赤の数字 — 18/37'],
     ['black', 'Black (×2)', '黒の数字 — 18/37'],
@@ -203,16 +209,16 @@ function optionsRow(game, p, disabled) {
 }
 function betBarRow(game, p, disabled) {
     const scaleOff = disabled || p.test || isUnset(p);
-    return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`t:${game}:half`).setLabel('½').setStyle(ButtonStyle.Secondary).setDisabled(scaleOff), new ButtonBuilder().setCustomId(`t:${game}:double`).setLabel('2×').setStyle(ButtonStyle.Secondary).setDisabled(scaleOff), new ButtonBuilder().setCustomId(`t:${game}:amt`).setLabel('金額変更').setStyle(ButtonStyle.Secondary).setDisabled(disabled), new ButtonBuilder().setCustomId(`dep:open:${game}`).setLabel('入金').setStyle(ButtonStyle.Success).setDisabled(disabled));
+    return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`t:${game}:half`).setLabel('½').setStyle(ButtonStyle.Secondary).setDisabled(scaleOff), new ButtonBuilder().setCustomId(`t:${game}:double`).setLabel('2×').setStyle(ButtonStyle.Secondary).setDisabled(scaleOff), new ButtonBuilder().setCustomId(`t:${game}:amt`).setLabel('金額変更').setStyle(ButtonStyle.Secondary).setDisabled(disabled), withEmoji(new ButtonBuilder().setCustomId(`dep:open:${game}`).setLabel('入金').setStyle(ButtonStyle.Secondary).setDisabled(disabled), 'ui_wallet'));
 }
 function betButtonRow(game, p, disabled) {
     const label = p.test ? `TEST BET (仮 ¥${TEST_BET})` : isUnset(p) ? 'BET 額を設定' : `BET ¥${(p.pp + p.ltc).toLocaleString()}`;
-    return new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId(`t:${game}:bet`).setLabel(label).setStyle(ButtonStyle.Success).setDisabled(disabled));
+    return new ActionRowBuilder().addComponents(withEmoji(new ButtonBuilder().setCustomId(`t:${game}:bet`).setLabel(label).setStyle(ButtonStyle.Primary).setDisabled(disabled), 'ui_chip'));
 }
 function renderTable(v) {
     const test = v.test ?? v.prefs.test;
     const r = getReserves(v.uid);
-    const desc = [];
+    const desc = [`### ${GAME_ICON[v.game]() || TITLE[v.game].split(' ')[0]} ${NAME[v.game]}${test ? '  [TEST]' : ''}`];
     if (test)
         desc.push(`**テストプレイ** — 仮の BET ${TEST_BET} で計算。残高・履歴・実績には反映されません`);
     if (v.board)
@@ -220,13 +226,12 @@ function renderTable(v) {
     if (v.result)
         desc.push(v.result);
     if (v.notice)
-        desc.push(`⚠️ ${v.notice}`);
+        desc.push(`**注意**  ${v.notice}`);
     if (!v.board && !v.result)
         desc.push(v.game === 'craps' ? '_賭けの種類を選んで台に置き、ROLL で振ります_' : '_BET を押すとゲームが始まります_');
     const opt = optText(v.game, v.prefs);
     const embed = new EmbedBuilder()
-        .setTitle(`${test ? '[TEST] ' : ''}${TITLE[v.game]}`)
-        .setColor(v.color ?? 0x3b82f6)
+        .setColor(v.color ?? COLOR.violet)
         .setDescription(desc.join('\n\n').slice(0, 4096))
         .addFields(...(v.fields ?? []), { name: 'BET', value: betText(v.prefs), inline: true }, ...(opt ? [opt] : []), { name: '残高', value: `PP ¥${r.pp.toLocaleString()} / LTC ¥${r.ltc.toLocaleString()}`, inline: true });
     if (v.sid)
@@ -245,12 +250,12 @@ function renderTable(v) {
 function resultLine(bet, payout) {
     const net = payout - bet;
     if (net > 0)
-        return { text: `**WIN  +¥${net.toLocaleString()}**  (払戻 ¥${payout.toLocaleString()})`, color: 0x22c55e };
+        return { text: `**WIN  +¥${net.toLocaleString()}**  (払戻 ¥${payout.toLocaleString()})`, color: COLOR.purple };
     if (net < 0 && payout > 0)
-        return { text: `**LOSE  -¥${(-net).toLocaleString()}**  (払戻 ¥${payout.toLocaleString()})`, color: 0xef4444 };
+        return { text: `**LOSE  -¥${(-net).toLocaleString()}**  (払戻 ¥${payout.toLocaleString()})`, color: COLOR.black };
     if (net < 0)
-        return { text: `**LOSE  -¥${bet.toLocaleString()}**`, color: 0xef4444 };
-    return { text: '**PUSH**  — BET 返却', color: 0x9ca3af };
+        return { text: `**LOSE  -¥${bet.toLocaleString()}**`, color: COLOR.black };
+    return { text: '**PUSH**  — BET 返却', color: COLOR.silver };
 }
 /* ────────────── 応答の共通処理 ────────────── */
 /** 本人の操作は同時に 1 つだけ (BET の連打で二重に引き落とさないため)。 */
@@ -684,7 +689,7 @@ function vpHoldButtons(st) {
     st.cards.forEach((c, idx) => {
         const state = st.held[idx] ? 'HELD' : 'HOLD';
         const btn = new ButtonBuilder().setCustomId(`vp:hold:${idx}`)
-            .setStyle(st.held[idx] ? ButtonStyle.Success : ButtonStyle.Secondary);
+            .setStyle(st.held[idx] ? ButtonStyle.Primary : ButtonStyle.Secondary);
         const e = cardButtonEmoji(c);
         if (e)
             btn.setEmoji(e).setLabel(state);
@@ -756,7 +761,7 @@ async function renderVideoPoker(i, sid, st) {
         game: 'videopoker', uid, prefs: p, test, board, sid, inRound: true,
         result: '残すカードを HOLD して DRAW',
         actions: [vpHoldButtons(st)],
-        primary: new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('vp:draw').setLabel('DRAW').setStyle(ButtonStyle.Success)),
+        primary: new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('vp:draw').setLabel('DRAW').setStyle(ButtonStyle.Primary)),
     });
 }
 /* ────────────── CRAPS ────────────── */
@@ -774,13 +779,13 @@ function crapsView(uid, sid, st, notice) {
         // 台に賭けが載っていれば台の状態 (テスト/本番) を、空の台なら次に賭けるときの設定を表示する
         game: 'craps', uid, prefs: getPrefs(uid, 'craps'), test: st.totalWagered > 0 ? !!entry?.test : undefined, sid, notice,
         board: st.lastRoll ? `${crapsDiceLine(st.lastRoll[0], st.lastRoll[1])}\n${header}` : header,
-        color: st.phase === 'comeout' ? 0x3b82f6 : 0xf59e0b,
+        color: st.phase === 'comeout' ? COLOR.violet : COLOR.purple,
         fields: [
             { name: `台の上のベット (${st.bets.length})`, value: betsText.slice(0, 1024) },
             { name: '直近の振り', value: hist.slice(-1000) },
             { name: 'この台の累計', value: `${net >= 0 ? '+' : ''}¥${net.toLocaleString()} (賭 ¥${st.totalWagered.toLocaleString()} / 戻 ¥${st.totalReturned.toLocaleString()})` },
         ],
-        primary: new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cr:roll').setLabel('ROLL').setStyle(ButtonStyle.Success).setDisabled(st.bets.length === 0), new ButtonBuilder().setCustomId('cr:undo').setLabel('直前のベット取消').setStyle(ButtonStyle.Secondary).setDisabled(st.bets.length === 0), new ButtonBuilder().setCustomId('cr:end').setLabel('END').setStyle(ButtonStyle.Danger)),
+        primary: new ActionRowBuilder().addComponents(withEmoji(new ButtonBuilder().setCustomId('cr:roll').setLabel('ROLL').setStyle(ButtonStyle.Primary).setDisabled(st.bets.length === 0), 'game_craps'), new ButtonBuilder().setCustomId('cr:undo').setLabel('直前のベット取消').setStyle(ButtonStyle.Secondary).setDisabled(st.bets.length === 0), new ButtonBuilder().setCustomId('cr:end').setLabel('END').setStyle(ButtonStyle.Secondary)),
     };
 }
 /** 新しいクラップスの台を開く (ack 済みの前提)。 */
