@@ -42,7 +42,9 @@ export const ADMIN_PANEL_KINDS = [
     { key: 'admin:server', label: 'サーバー管理パネル' },
 ];
 export const isAdminPanelKey = (key) => key === 'admin' || key.startsWith('admin:');
-export const panelLabel = (key) => [...PANEL_KINDS, ...LEGACY_KINDS, ...ADMIN_PANEL_KINDS].find(k => k.key === key)?.label ?? key;
+/** /rules で設置する利用規約パネル。ゲーム管理パネルの対象外 */
+export const isRulesPanelKey = (key) => key === 'rules';
+export const panelLabel = (key) => [...PANEL_KINDS, ...LEGACY_KINDS, ...ADMIN_PANEL_KINDS, { key: 'rules', label: '利用規約' }].find(k => k.key === key)?.label ?? key;
 /** 管理パネル専用の絵文字。ユーザー向けの画面と混同しないよう、別の絵柄を使う。 */
 const ADM = {
     badge: () => emoji('adm_badge') || '◆',

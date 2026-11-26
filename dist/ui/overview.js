@@ -199,7 +199,7 @@ export function cashierEmbed(footer = 'C4sino · Cashier') {
                     `出金: 手数料無料。送金リンクを DM で受け取り (**${yen(MIN_WITHDRAW_JPY.paypay)}** 〜)`,
                 ] },
             { icon: ICON.ltc(), title: 'LTC', lines: [
-                    `入金: 専用アドレスに送金、1 承認で自動反映 (**${yen(MIN_DEPOSIT_JPY.ltc)}** 〜)`,
+                    `入金: 表示された量をぴったり送金、3 承認で自動反映 (**${yen(MIN_DEPOSIT_JPY.ltc)}** 〜)`,
                     `出金: 指定アドレスへ送金、手数料 ${yen(LTC_NETWORK_FEE_JPY)} (**${yen(MIN_WITHDRAW_JPY.ltc)}** 〜)`,
                     'レートは CoinGecko の現在値で円に換算',
                 ] },

@@ -8,7 +8,7 @@ import {
 } from 'discord.js';
 import {
   adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal,
-  panelLabel, isAdminPanelKey, isLegacyPanelKey, type InstalledPanel, type WalletRow, type UserSummary, type Notice,
+  panelLabel, isAdminPanelKey, isLegacyPanelKey, isRulesPanelKey, type InstalledPanel, type WalletRow, type UserSummary, type Notice,
   mwsResetScreen, mwsWarningEmbed, ltcUnmatchedEmbed, salesScreen, type SalesSummary, type SalesPeriod,
 } from './ui/admin-panel.js';
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
@@ -24,6 +24,7 @@ import * as wallets from './payments/wallets.js';
 import { checkDeposits, ltcJpyRate, incomingTxs } from './payments/ltc.js';
 import * as ltcMatch from './payments/ltc-match.js';
 import { COLOR, ICON, panelEmbed } from './ui/theme.js';
+import { rulesPanel, getRulesConfig, setRulesConfig } from './ui/rules.js';
 import { invalidateLiquidityCache, maxAffordableBet, assertOperatorWithdrawSafe } from './payments/liquidity.js';
 import { MIN_DEPOSIT_JPY, MIN_WITHDRAW_JPY } from './payments/limits.js';
 import * as withdraw from './payments/withdraw.js';
@@ -158,6 +159,12 @@ async function onCommand(i: ChatInputCommandInteraction) {
     return i.reply({ ...mwsResetScreen(state.expiresAt, serverPanelChannels()), flags: MessageFlags.Ephemeral });
   }
   if (i.commandName === 'leet') return i.showModal(leetModal());
+  if (i.commandName === 'rules') {
+    if (!i.guildId || !i.channel || !('send' in i.channel)) return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
+    setRulesConfig(i.guildId, i.options.getChannel('ticket', true).id, i.options.getChannel('verify', true).id);
+    const err = await installPanel(i.guildId, i.channelId, 'rules');
+    return i.reply({ content: err ? `設置できませんでした: ${err}` : '利用規約パネルを設置しました。同じチャンネルでもう一度実行すると置き直します', flags: MessageFlags.Ephemeral });
+  }
 }
 
 /* ────────────── PayPay 直接操作 (ウォレット管理パネルから呼ぶ) ────────────── */
@@ -965,7 +972,7 @@ async function showAdmin(i: AdminI, payload: { embeds: EmbedBuilder[]; component
 
 /** ゲーム管理パネルが扱うパネル (ゲーム・入出金・ルール説明など)。管理パネル自身は含めない。 */
 function gamePanels(guildId: string): InstalledPanel[] {
-  return installedPanels(guildId).filter(p => !isAdminPanelKey(p.game));
+  return installedPanels(guildId).filter(p => !isAdminPanelKey(p.game) && !isRulesPanelKey(p.game));
 }
 
 function installedPanels(guildId: string): InstalledPanel[] {
@@ -980,6 +987,7 @@ function panelPayload(guildId: string, key: string): { embeds: EmbedBuilder[]; c
   if (isGame(key)) return publicGamePanel(key);
   if (key === 'cashier') return depositPanel();
   if (key.startsWith('overview:')) return { embeds: [gameOverview(key.slice(9) as GameKey)] };
+  if (key === 'rules') { const cfg = getRulesConfig(guildId); return cfg ? rulesPanel(cfg) : null; }
   if (key === 'mws') return mwsPanel(mws.getState());
   if (key === 'leet') return leetPanel();
   if (key === 'admin') return adminHub();   // 以前の 1 枚にまとめた管理パネル
