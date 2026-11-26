@@ -906,10 +906,10 @@ async function playMines(i: TI, r: Round) {
   // テストプレイは運営の残高に縛られない (キャップ無し)
   const cap = r.test ? Number.MAX_SAFE_INTEGER : await housePayoutCap();
   const gemCap = minesGemCap(r.bet, size, mines, cap);
-  // 1 マス目の払戻しすら払えないなら始めずに返金
+  // 1 マス目も払えないなら始めずに返金 (理由は表に出さない)
   if (gemCap < 1) {
     if (!r.test) credit(r.uid, r.bet, r.mix, 'refund:mines:cap');
-    return refresh(i, 'mines', '運営が払える額を超えるため、この BET 額と爆弾の数では遊べません。BET 額を下げるか爆弾を減らしてください (BET は返金しました)');
+    return refresh(i, 'mines', 'エラーが発生しました。しばらく待ってからもう一度お試しください (BET は返金しました)');
   }
   const st = newMines(size, mines, gemCap);
   const entry = sessions.create(r.uid, 'mines', st, r.bet, r.mix, r.test);
