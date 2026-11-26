@@ -33,7 +33,9 @@ export const PANEL_KINDS: Array<{ key: string; label: string; emoji: string; gro
   { key: 'overview:cashier',    label: 'ルール: 入出金',           emoji: 'ui_wallet',       group: 'ルール説明' },
   { key: 'mws',   label: 'MWS 延長タイマー', emoji: 'adm_server', group: '運営' },
   { key: 'leet',  label: 'LEET 変換',        emoji: 'adm_leet',   group: '運営' },
-  { key: 'admin', label: '管理パネル',       emoji: 'adm_badge',  group: '運営' },
+  { key: 'admin:games',  label: 'ゲーム管理パネル',     emoji: 'adm_panel',  group: '管理' },
+  { key: 'admin:wallet', label: 'ウォレット管理パネル', emoji: 'adm_wallet', group: '管理' },
+  { key: 'admin:server', label: 'サーバー管理パネル',   emoji: 'adm_server', group: '管理' },
 ];
 export const panelLabel = (key: string) => PANEL_KINDS.find(k => k.key === key)?.label ?? key;
 /** 管理パネル専用の絵文字。ユーザー向けの画面と混同しないよう、別の絵柄を使う。 */
@@ -99,6 +101,42 @@ export function adminHub() {
   };
 }
 
+/* ────────────── チャンネルに常設する管理パネル (/admin panel) ────────────── */
+// 選択欄は置かない (選んだ値が他の管理者の画面にも残るため)。ボタンで本人だけの作業画面を開く。
+
+export function gamesLanding(installed: InstalledPanel[]) {
+  const lines = installed.length
+    ? installed.map(p => `${panelIcon(p.game)} ${panelLabel(p.game)} — <#${p.channel_id}>`)
+    : ['_まだ設置されていません_'];
+  const embed = screen('ゲーム管理パネル', 'ゲーム・入出金・ルール説明などのパネルを設置', [
+    { icon: ADM.panel(), title: `設置済み (${installed.length})`, lines },
+    { icon: ADM.bullet(), title: '使い方', lines: [
+      '「パネルを設置する」: 種類とチャンネルを選んで設置',
+      '「全パネルを再設置」: 設置済みを全部消して置き直す',
+      '「一覧を更新」: 上の一覧を最新にする',
+    ] },
+  ], undefined, ADM.panel());
+  return { embeds: [embed], components: [row(
+    btn('ap:open:games', 'パネルを設置する', ButtonStyle.Secondary, 'adm_panel'),
+    btn('ap:games:reinstall', '全パネルを再設置', ButtonStyle.Secondary, undefined, installed.length === 0),
+    btn('ap:land:games', '一覧を更新'),
+  )] };
+}
+
+export function walletLanding(rows: WalletRow[]) {
+  const embed = walletScreen(rows, undefined).embeds[0];
+  return { embeds: [embed], components: [row(
+    btn('ap:open:wallet', 'ウォレットを操作する', ButtonStyle.Secondary, 'adm_wallet'),
+    btn('ap:wallet:addpp', 'PayPay を登録', ButtonStyle.Secondary, 'pay_paypay'),
+    btn('ap:wallet:addltc', 'LTC を登録', ButtonStyle.Secondary, 'pay_ltc'),
+    btn('ap:land:wallet', '一覧を更新'),
+  )] };
+}
+
+export function serverLanding() {
+  return serverHome();
+}
+
 /* ────────────── ① ゲームパネル ────────────── */
 
 export interface InstalledPanel { channel_id: string; message_id: string; game: string }
@@ -115,7 +153,7 @@ export function gamesScreen(installed: InstalledPanel[], sel: { kind?: string; c
       '③ 「設置」。同じチャンネルに同じパネルがあれば置き直す',
       '「全パネルを再設置」で、設置済みを全部消して置き直す',
     ] },
-  ], notice);
+  ], notice, ADM.panel());
   const kind = new StringSelectMenuBuilder().setCustomId('ap:games:kind').setPlaceholder('① 設置するパネルの種類')
     .addOptions(PANEL_KINDS.map(k => {
       const o = new StringSelectMenuOptionBuilder().setValue(k.key).setLabel(k.label).setDescription(k.group).setDefault(k.key === sel.kind);
@@ -135,7 +173,6 @@ export function gamesScreen(installed: InstalledPanel[], sel: { kind?: string; c
         btn('ap:games:install', '③ 設置', ButtonStyle.Primary, 'adm_check', !(sel.kind && sel.channelId)),
         btn('ap:games:reinstall', '全パネルを再設置', ButtonStyle.Secondary, undefined, installed.length === 0),
         btn('ap:open:games', '表示を更新'),
-        btn('ap:open:home', '戻る'),
       ),
     ],
   };
@@ -165,7 +202,7 @@ export function walletScreen(rows: WalletRow[], selectedId: number | undefined, 
       `#${w.id} ${w.label} — ${state(w)} / ${w.derivation ? '自動送金あり' : '受け取り専用'} / \`${w.address}\``) : ['_未登録_'] },
     { icon: ADM.bullet(), title: '使い方', lines: [
       '登録: 「PayPay を登録」「LTC を登録」',
-      '切り替え・削除・残高確認: 上でウォレットを選んでから押す',
+      '切り替え・削除・残高確認: ウォレットを選んでから押す',
       '利益の引き出し: PayPay ウォレットを選んで押す (選ばなければ残高の多いもの)',
     ] },
   ];
@@ -196,7 +233,7 @@ export function walletScreen(rows: WalletRow[], selectedId: number | undefined, 
     btn('ap:wallet:refresh', 'PayPay 残高を一括更新', ButtonStyle.Secondary, undefined, pp.length === 0),
     btn('ap:wallet:transfer', '利益を引き出す', ButtonStyle.Secondary, 'adm_wallet', pp.length === 0),
   ));
-  comps.push(row(btn('ap:open:wallet', '表示を更新'), btn('ap:open:home', '戻る')));
+  comps.push(row(btn('ap:open:wallet', '表示を更新')));
   return { embeds: [embed], components: comps };
 }
 
@@ -214,7 +251,7 @@ export function serverHome(notice?: Notice) {
       btn('ap:open:ng', 'NG ワード管理', ButtonStyle.Secondary, 'adm_ng'),
       btn('ap:open:user', 'ユーザー管理', ButtonStyle.Secondary, 'adm_user'),
       btn('ap:open:ops', '運営データ', ButtonStyle.Secondary, 'adm_chart'),
-      btn('ap:open:home', '戻る'),
+      btn('ap:open:leet', 'LEET', ButtonStyle.Secondary, 'adm_leet'),
     )],
   };
 }
@@ -266,7 +303,7 @@ export function userScreen(sel: UserSummary | undefined, notice?: Notice) {
     components: [
       new ActionRowBuilder<UserSelectMenuBuilder>().addComponents(pick),
       row(
-        btn('ap:user:info', '情報', ButtonStyle.Primary, 'adm_user', none),
+        btn('ap:user:info', '情報', ButtonStyle.Secondary, 'adm_user', none),
         btn('ap:user:history', '取引履歴', ButtonStyle.Secondary, undefined, none),
         btn('ap:user:ban', 'BAN', ButtonStyle.Danger, 'adm_ban', none || !!sel?.banned),
         btn('ap:user:unban', 'BAN 解除', ButtonStyle.Secondary, undefined, none || !sel?.banned),

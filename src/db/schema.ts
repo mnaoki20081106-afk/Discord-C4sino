@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS achievements (
 CREATE INDEX IF NOT EXISTS idx_ach_guild ON achievements(guild_id);
 
 -- MWS (cloud.m-ws.cc) の 7 日自動延長タイマー状態 (シングルトン行)
--- user がダッシュボードで延長ボタンを押したら /mws 延長完了 コマンドでタイマーをリセット。
+-- user がダッシュボードで延長ボタンを押したら、MWS タイマーパネルの「延長完了」でタイマーをリセット。
 -- 残り 24h / 6h / 1h の閾値を跨いだ時に通知チャンネルに警告を投げる。
 CREATE TABLE IF NOT EXISTS mws_extension (
   id                INTEGER PRIMARY KEY CHECK(id = 1),

@@ -48,7 +48,7 @@ export function publicGamePanel(game) {
     return { embeds: [gamePanelEmbed(game)], components: [row] };
 }
 /**
- * 残高カード。/balance と各パネルの [残高] ボタンで使う。
+ * 残高カード。各パネルの [残高] ボタンで使う。
  * 合計と、PayPay 由来 / LTC 由来の割合を絵文字のゲージで出す。
  */
 export async function balanceReply(pp, ltc, note) {

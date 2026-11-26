@@ -144,7 +144,7 @@ export function gamePanelEmbed(g) {
         ],
     });
 }
-/** /setup type:overview のルール説明パネル */
+/** ルール説明パネル (ゲーム管理パネルから設置) */
 export function gameOverview(game) {
     if (game === 'cashier')
         return cashierEmbed('C4sino · 入出金のルール');

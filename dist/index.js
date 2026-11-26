@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, Partials, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, Events, PermissionFlagsBits, EmbedBuilder, ButtonBuilder, ButtonStyle, MessageFlags, } from 'discord.js';
-import { adminHub, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal, panelLabel, } from './ui/admin-panel.js';
+import { adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal, panelLabel, } from './ui/admin-panel.js';
 import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
 import * as sessions from './games/session-store.js';
 import { openTable, replayInPlace, onTableButton, onTableSelect, onTableModal, onBlackjackAction, onVideoPokerAction, onCrapsAction, isGame, setTablesClient, } from './tables.js';
@@ -139,39 +139,10 @@ client.on(Events.InteractionCreate, async (i) => {
 });
 /* ────────────── COMMANDS ────────────── */
 async function onCommand(i) {
-    switch (i.commandName) {
-        case 'balance': return cmdBalance(i);
-        case 'admin': return cmdAdmin(i);
-        case 'pay': return cmdPay(i);
-        case 'withdraw': return cmdWithdraw(i);
-    }
+    if (i.commandName === 'admin')
+        return cmdAdmin(i);
 }
-async function cmdWithdraw(i) {
-    assertNotBanned(i.user.id);
-    const method = i.options.getString('method', true);
-    if (method === 'paypay')
-        return openPaypayWithdrawModal(i);
-    return openLtcWithdrawModal(i);
-}
-async function cmdPay(i) {
-    assertNotBanned(i.user.id);
-    const method = i.options.getString('method', true);
-    if (method === 'paypay')
-        return openPaypayDepositModal(i);
-    if (method === 'ltc') {
-        const amount = i.options.getInteger('amount');
-        if (amount && amount > 0)
-            return replyLtcQuote(i, amount);
-        // amount 省略 → モーダルで JPY 入力を促す
-        return showLtcAddress(i);
-    }
-}
-async function cmdBalance(i) {
-    const r = getReserves(i.user.id);
-    const payload = await balanceReply(r.pp, r.ltc);
-    await i.reply({ ...payload, flags: MessageFlags.Ephemeral });
-}
-/* ────────────── /paypay (admin direct ops) ────────────── */
+/* ────────────── PayPay 直接操作 (ウォレット管理パネルから呼ぶ) ────────────── */
 async function cmdPaypay(i) {
     if (!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))
         return i.reply({ content: '権限が不足しています', flags: MessageFlags.Ephemeral });
@@ -236,7 +207,7 @@ async function cmdPaypay(i) {
                 .sort((a, b) => (b.balance_cached ?? 0) - (a.balance_cached ?? 0));
             w = candidates[0];
             if (!w)
-                return i.editReply(`❌ ¥${amount.toLocaleString()} を送れるウォレットがありません (残高キャッシュ未更新の可能性: /paypay balance で更新)`);
+                return i.editReply(`❌ ¥${amount.toLocaleString()} を送れるウォレットがありません (残高が古い可能性: ウォレット管理パネルの「PayPay 残高を一括更新」で更新)`);
         }
         // Solvency ガード: 引き出し後も流通チップを払えるか検査
         const bad = await assertOperatorWithdrawSafe(amount, 'paypay');
@@ -286,6 +257,8 @@ async function cmdWallet(i) {
             if (!isValidLtcAddress(address))
                 return i.reply({ content: 'LTC アドレスではありません (L / M / ltc1 のみ受付)', flags: MessageFlags.Ephemeral });
             const id = wallets.addLtcWallet(i.user.id, label, address);
+            if (i.guildId)
+                await refreshAdminLandings(i.guildId, ['admin:wallet']);
             return i.reply({ content: `✅ LTC ウォレット (view-only) 追加 id=${id}`, flags: MessageFlags.Ephemeral });
         }
         // address 省略: BlockCypher でホットウォレット生成
@@ -296,6 +269,8 @@ async function cmdWallet(i) {
             // derivation は wallets.addLtcWallet 側で encryptSecret される
             const derivation = JSON.stringify({ priv: g.priv, pub: g.pub });
             const id = wallets.addLtcWallet(i.user.id, label, g.address, derivation);
+            if (i.guildId)
+                await refreshAdminLandings(i.guildId, ['admin:wallet']);
             const embed = new EmbedBuilder()
                 .setTitle(`✅ LTC HOT ウォレット生成 id=${id}`)
                 .setColor(0x22c55e)
@@ -568,7 +543,7 @@ async function cmdAdmin(i) {
                 : '_(なし)_', inline: false }, { name: '直近取引 10 件 (ledger)', value: lastTx.length
                 ? lastTx.map(t => `\`<t:${t.created_at}:f>\` ${formatLedgerLine(t.delta, t.reason, t.ref)}`).join('\n').slice(0, 1024)
                 : '_(なし)_', inline: false })
-            .setFooter({ text: '詳細履歴は /admin history user:... · chip 付与は /admin grant · 制裁は /admin ban / unban' });
+            .setFooter({ text: '取引履歴・chip 付与・BAN はサーバー管理パネルの「ユーザー管理」から' });
         return i.editReply({ embeds: [...payload.embeds, embed], files: payload.files });
     }
     if (sub === 'pending') {
@@ -764,8 +739,10 @@ async function cmdAdmin(i) {
     if (sub === 'panel') {
         if (!i.channel || !('send' in i.channel))
             return i.reply({ content: 'このチャンネルには設置できません', flags: MessageFlags.Ephemeral });
-        const err = await installPanel(i.guildId, i.channelId, 'admin');
-        return i.reply({ content: err ? `設置できませんでした: ${err}` : '管理パネルを設置しました', flags: MessageFlags.Ephemeral });
+        const type = i.options.getString('type', true);
+        const key = `admin:${type}`;
+        const err = await installPanel(i.guildId, i.channelId, key);
+        return i.reply({ content: err ? `設置できませんでした: ${err}` : `${panelLabel(key)}を設置しました`, flags: MessageFlags.Ephemeral });
     }
 }
 /* ────────────── BUTTONS ────────────── */
@@ -925,7 +902,13 @@ function installedPanels(guildId) {
     return db.prepare('SELECT channel_id, message_id, game FROM panels WHERE guild_id=? ORDER BY rowid').all(guildId);
 }
 /** 設置するパネルの中身。key は PANEL_KINDS の key。 */
-function panelPayload(key) {
+function panelPayload(guildId, key) {
+    if (key === 'admin:games')
+        return gamesLanding(installedPanels(guildId));
+    if (key === 'admin:wallet')
+        return walletLanding(adminWallets());
+    if (key === 'admin:server')
+        return serverLanding();
     if (isGame(key))
         return publicGamePanel(key);
     if (key === 'cashier')
@@ -937,12 +920,12 @@ function panelPayload(key) {
     if (key === 'leet')
         return leetPanel();
     if (key === 'admin')
-        return adminHub();
+        return adminHub(); // 以前の 1 枚にまとめた管理パネル
     return null;
 }
 /** 1 つ設置する。同じチャンネルに同じ種類があれば、古い方を消して置き直す。 */
 async function installPanel(guildId, channelId, key) {
-    const payload = panelPayload(key);
+    const payload = panelPayload(guildId, key);
     if (!payload)
         return '不明なパネルです';
     const ch = await client.channels.fetch(channelId).catch(() => null);
@@ -958,6 +941,18 @@ async function installPanel(guildId, channelId, key) {
     }
     catch (e) {
         return `投稿できませんでした (${e.message})`;
+    }
+}
+/** チャンネルに常設しているゲーム管理パネル / ウォレット管理パネルの一覧を最新にする。 */
+async function refreshAdminLandings(guildId, keys) {
+    const rows = db.prepare('SELECT channel_id, message_id, game FROM panels WHERE guild_id=?').all(guildId)
+        .filter(p => keys.includes(p.game));
+    for (const p of rows) {
+        const payload = panelPayload(guildId, p.game);
+        const ch = await client.channels.fetch(p.channel_id).catch(() => null);
+        if (!payload || !ch || !('messages' in ch))
+            continue;
+        await ch.messages.edit(p.message_id, payload).catch(() => { });
     }
 }
 function adminWallets() {
@@ -996,6 +991,13 @@ async function onAdminPanel(i) {
     const [, sec, act, arg] = i.customId.split(':');
     const s = selOf(i.user.id);
     const gid = i.guildId;
+    // チャンネルに常設している管理パネルの「一覧を更新」
+    if (sec === 'land') {
+        const payload = panelPayload(gid, `admin:${act}`);
+        if (payload && i.isButton())
+            return i.update(payload);
+        return;
+    }
     // 画面の切り替え
     if (sec === 'open') {
         if (act === 'leet')
@@ -1017,6 +1019,7 @@ async function onAdminPanel(i) {
                 return renderAdmin(i, 'games', { ok: false, text: '種類とチャンネルを選んでください' });
             await i.deferUpdate();
             const err = await installPanel(gid, s.channelId, s.kind);
+            await refreshAdminLandings(gid, ['admin:games']);
             return renderAdmin(i, 'games', err ? { ok: false, text: err } : { ok: true, text: `${panelLabel(s.kind)} を <#${s.channelId}> に設置しました` });
         }
         if (act === 'reinstall') {
@@ -1032,6 +1035,7 @@ async function onAdminPanel(i) {
                 if (err)
                     failed.push(`${panelLabel(p.game)} (<#${p.channel_id}>): ${err}`);
             }
+            await refreshAdminLandings(gid, ['admin:games']);
             return renderAdmin(i, 'games', failed.length
                 ? { ok: false, text: `${rows.length - failed.length} / ${rows.length} 個を置き直しました。失敗: ${failed.join(' / ')}` }
                 : { ok: true, text: `${rows.length} 個のパネルを置き直しました` });
@@ -1049,6 +1053,7 @@ async function onAdminPanel(i) {
                 return renderAdmin(i, 'wallet', { ok: false, text: 'ウォレットを選んでください' });
             wallets.setEnabled(w.id, act === 'enable');
             invalidateLiquidityCache();
+            await refreshAdminLandings(gid, ['admin:wallet']);
             return renderAdmin(i, 'wallet', { ok: true, text: `#${w.id} ${w.label} を${act === 'enable' ? '有効' : '無効'}にしました` });
         }
         if (act === 'remove') {
@@ -1062,6 +1067,7 @@ async function onAdminPanel(i) {
             wallets.removeWallet(w.id);
             s.walletId = undefined;
             invalidateLiquidityCache();
+            await refreshAdminLandings(gid, ['admin:wallet']);
             return renderAdmin(i, 'wallet', { ok: true, text: `#${w.id} ${w.label} を削除しました` });
         }
         if (act === 'balance') {
@@ -1455,6 +1461,8 @@ async function onModal(i) {
             const tokens = await pp.loginFinish(flow.sess, url);
             const id = wallets.addPaypayWallet(i.user.id, flow.label, flow.phone, tokens);
             paypayLoginFlow.delete(i.user.id);
+            if (i.guildId)
+                await refreshAdminLandings(i.guildId, ['admin:wallet']);
             await i.editReply(`✅ PayPay ウォレット追加 (#${id}) — ${tokens.name ?? 'account'} として登録`);
         }
         catch (e) {

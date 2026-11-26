@@ -1,6 +1,6 @@
 /**
  * ゲームと入出金の説明文。チャンネルに置くパネル (publicGamePanel / depositPanel) と、
- * /setup type:overview のルール説明パネルは、どちらもここの中身を theme.panelEmbed で組み立てる。
+ * ゲーム管理パネルで設置するルール説明パネルは、どちらもここの中身を theme.panelEmbed で組み立てる。
  * 数字はゲームのコード (src/games/*, src/payments/limits.ts) と一致させること。
  */
 import type { EmbedBuilder } from 'discord.js';
@@ -176,7 +176,7 @@ export function gamePanelEmbed(g: Game): EmbedBuilder {
   });
 }
 
-/** /setup type:overview のルール説明パネル */
+/** ルール説明パネル (ゲーム管理パネルから設置) */
 export function gameOverview(game: GameKey): EmbedBuilder {
   if (game === 'cashier') return cashierEmbed('C4sino · 入出金のルール');
   if (game === 'all') return allOverview();
