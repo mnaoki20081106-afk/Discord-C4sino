@@ -850,13 +850,14 @@ function minesGrid(st) {
     const done = st.phase !== 'play';
     const lines = [];
     for (let r = 0; r < st.size; r++) {
-        let line = '';
+        const cells = [];
         for (let c = 0; c < st.size; c++) {
             const k = r * st.size + c;
             // 終わったら爆弾をすべて見せる。開けた宝石は宝石、開けなかったマスは伏せたまま
-            line += st.bombs[k] && (done || st.opened[k]) ? MN.bomb() : st.opened[k] ? MN.gem() : MN.tile();
+            cells.push(st.bombs[k] && (done || st.opened[k]) ? MN.bomb() : st.opened[k] ? MN.gem() : MN.tile());
         }
-        lines.push(`### ${line}`);
+        // 見出しの行は上下の間隔が広いので、横にも同じくらいの空白 (全角幅 + 半角幅 + 細い空白) を入れて正方形に見せる
+        lines.push(`### ${cells.join('\u2003\u2002\u2009')}`);
     }
     return lines.join('\n');
 }
