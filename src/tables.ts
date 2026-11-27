@@ -28,7 +28,8 @@ import {
   crapsDiceLine, cardButtonEmoji, cardText, slotEmoji,
 } from './ui/format-games.js';
 import { bjActionsRow } from './ui/panels.js';
-import { housePayoutCap, clampPayout, setCrapsExposure, clearCrapsExposure } from './payments/liquidity.js';
+import { housePayoutCap, clampPayout, housePayoutCapSync, clampPayoutSync, setCrapsExposure, clearCrapsExposure, MAX_GROSS_MULT } from './payments/liquidity.js';
+import { randomUUID } from 'node:crypto';
 import * as ach from './achievements.js';
 import { MIN_BET_CHIPS, MAX_BET_CHIPS } from './payments/limits.js';
 import { L } from './ui/leet.js';
@@ -441,6 +442,10 @@ function sidOf(i: TI): string | null {
 async function capFor(test: boolean, crapsSid?: string): Promise<number> {
   return test ? Number.MAX_SAFE_INTEGER : housePayoutCap(crapsSid);
 }
+/** `capFor` の同期版。atomic に (cap 読み → 結果決定 → 予約) まで await を挟まないために使う。 */
+function capForSync(test: boolean, sid?: string): number {
+  return test ? Number.MAX_SAFE_INTEGER : housePayoutCapSync(sid);
+}
 
 /** 勝ったら記録して当たり通知を出す。extra は通知の表示だけに使う (掛け方・PayPay / LTC の内訳)。 */
 async function settled(i: TI, game: Game, bet: number, payout: number, test: boolean, extra?: { mix?: BetMix; detail?: string }) {
@@ -633,7 +638,16 @@ async function onBet(i: TI, game: Game) {
 /* ────────────── SLOTS ────────────── */
 
 async function playSlots(i: TI, r: Round) {
-  const result = spinWithCap(r.bet, await capFor(r.test));
+  // ① BET 受付と同じ同期ブロックで、cap 読み・出目決定・予約まで全部終わらせる
+  //   (ここまで `await` を挟まない。JS single-thread で他のユーザーの BET と直列化される)
+  const sid = r.test ? null : `s:slots:${randomUUID()}`;
+  const cap = capForSync(r.test, undefined);
+  const result = spinWithCap(r.bet, cap);
+  const gross = r.bet * result.payoutMult;
+  const payout = Math.min(gross, cap);
+  if (sid && payout > 0) setCrapsExposure(sid, payout);
+
+  // ② 演出 (結果は既に確定しているので、ここは見た目だけ)
   const strips = [reelStrip(result.reels[0], 8), reelStrip(result.reels[1], 10), reelStrip(result.reels[2], 12)];
   const frames: [number, number, number][] = [
     [0, 0, 0],
@@ -641,12 +655,12 @@ async function playSlots(i: TI, r: Round) {
     [strips[0].length - 1, 7, 9],
     [strips[0].length - 1, strips[1].length - 1, strips[2].length - 1],
   ];
-  let payout = 0;
   for (let f = 0; f < frames.length; f++) {
     const spinning = f < frames.length - 1;
-    if (!spinning && result.payoutMult > 0) {
-      payout = r.test ? r.bet * result.payoutMult : await clampPayout(r.bet * result.payoutMult);
-      if (!r.test) credit(r.uid, payout, r.mix, 'win:slots');
+    // ③ 最終コマを出す直前に credit (残高表示が今までと同じタイミングで更新される)
+    if (!spinning && !r.test && payout > 0) {
+      credit(r.uid, payout, r.mix, 'win:slots');
+      if (sid) clearCrapsExposure(sid);
     }
     const reels = frames[f].map((idx, n) => strips[n][idx]) as typeof result.reels;
     const label = !spinning && result.payoutMult >= 200
@@ -667,16 +681,25 @@ async function playRoulette(i: TI, r: Round) {
   const kind = k as RouKind;
   const number = kind === 'number' ? Number(n) : undefined;
   const bet = { kind, amount: r.bet, number };
-  const result = spinRouletteWithCap(bet, await capFor(r.test));
+  // ① atomic に決定 & 予約
+  const sid = r.test ? null : `s:rou:${randomUUID()}`;
+  const cap = capForSync(r.test, undefined);
+  const result = spinRouletteWithCap(bet, cap);
   const mult = rouPayout(bet, result);
+  const payout = mult > 0 ? Math.min(r.bet * mult, cap) : 0;
+  if (sid && payout > 0) setCrapsExposure(sid, payout);
   const betLabel = kind === 'number' ? `Single Number ${number}` : (ROU_LABEL[kind] ?? kind);
 
+  // ② 演出
   const spinBoard = formatRoulette({ resultNumber: result, spinning: true, betLabel, betAmount: r.bet, payoutMult: 0 });
   await show(i, { game: 'roulette', uid: r.uid, prefs: r.p, test: r.test, board: spinBoard, inRound: true });
   await new Promise(ok => setTimeout(ok, 900));
 
-  const payout = mult > 0 ? (r.test ? r.bet * mult : await clampPayout(r.bet * mult)) : 0;
-  if (!r.test) credit(r.uid, payout, r.mix, 'win:roulette');
+  // ③ credit + 予約解放
+  if (!r.test && payout > 0) {
+    credit(r.uid, payout, r.mix, 'win:roulette');
+    if (sid) clearCrapsExposure(sid);
+  }
   const board = formatRoulette({ resultNumber: result, spinning: false, betLabel, betAmount: r.bet, payoutMult: mult });
   const res = resultLine(r.bet, payout);
   await show(i, { game: 'roulette', uid: r.uid, prefs: r.p, test: r.test, board, result: res.text, color: res.color });
@@ -687,10 +710,12 @@ async function playRoulette(i: TI, r: Round) {
 
 async function playBaccarat(i: TI, r: Round) {
   const side = (BAC_SIDES.some(([s]) => s === r.p.opt) ? r.p.opt : 'player') as BacSide;
-  const d = dealBaccaratWithCap(side, r.bet, await capFor(r.test));
+  // 演出なし → 決定 & credit を同じ同期ブロックで (予約は不要)
+  const cap = capForSync(r.test, undefined);
+  const d = dealBaccaratWithCap(side, r.bet, cap);
   const mult = bacPayout(side, d.winner);
-  const payout = mult > 0 ? (r.test ? Math.floor(r.bet * mult) : await clampPayout(Math.floor(r.bet * mult))) : 0;
-  if (!r.test) credit(r.uid, payout, r.mix, 'win:baccarat');
+  const payout = mult > 0 ? Math.min(Math.floor(r.bet * mult), cap) : 0;
+  if (!r.test && payout > 0) credit(r.uid, payout, r.mix, 'win:baccarat');
   const board = formatBaccarat({
     player: d.player, banker: d.banker, winner: d.winner,
     playerTotal: d.playerTotal, bankerTotal: d.bankerTotal, side, bet: r.bet, payout,
@@ -702,9 +727,17 @@ async function playBaccarat(i: TI, r: Round) {
 
 /* ────────────── BLACKJACK ────────────── */
 
+/** BJ セッションが運営に対して負いうる最大額 (今の全ハンドの合計 bet × 2.5)。
+ *  2.5 は Natural BJ の倍率。double / split で bet が増えれば自動で広がる。 */
+function bjReservation(st: BJState): number {
+  return Math.ceil(st.bets.reduce((s, b) => s + b, 0) * 2.5);
+}
+
 async function playBlackjack(i: TI, r: Round) {
   const st = startHand(r.bet, newShoe());
   const entry = sessions.create(r.uid, 'blackjack', st, r.bet, r.mix, r.test);
+  // BET 受付の瞬間に、このセッションが払う可能性のある最大額を予約 (他ユーザーの cap から引かれる)
+  if (!r.test) setCrapsExposure(entry.id, bjReservation(st));
   if (isBlackjack(st.player[0]) || isBlackjack(st.dealer)) {
     const dealerBJ = isBlackjack(st.dealer), playerBJ = isBlackjack(st.player[0]);
     if (playerBJ && dealerBJ) { st.results = ['push']; st.payout = r.bet; }
@@ -742,30 +775,15 @@ export async function onBlackjackAction(i: ButtonInteraction, action: 'hit' | 's
         txCredit(i.user.id, -addl, `bet:blackjack:${action}`, sid!);
       }
     }
+    // double / split で bet が増えたら、同じ同期ブロックで予約も広げる
+    if (!entry.test) setCrapsExposure(entry.id, bjReservation(st));
     await ack(i);
-    apply(st, action, await capFor(!!entry.test));
+    // settleDealer の reshuffle には "自分の予約は無視した cap" を渡す (自分の分の余力を使い切っていい)
+    apply(st, action, capForSync(!!entry.test, entry.id));
     await renderBlackjack(i, entry.id, st);
   } finally {
     busy.delete(k);
   }
-}
-
-/** 払戻しを上限まで抑える。払戻しが 0 になる手は 'lose' に書き換える。 */
-async function applyBJClamp(st: BJState) {
-  if (!st.payout || !st.results) return;
-  const cap = await housePayoutCap();
-  if (st.payout <= cap) return;
-  const pay = (idx: number) => {
-    const res = st.results?.[idx]; const b = st.bets[idx];
-    return res === 'bj' ? Math.floor(b * 2.5) : res === 'win' ? b * 2 : res === 'push' ? b : 0;
-  };
-  const order = st.player.map((_, idx) => idx).sort((a, b) => pay(b) - pay(a));
-  for (const idx of order) {
-    if (st.payout! <= cap) break;
-    const was = pay(idx);
-    if (was > 0 && st.results[idx] !== 'lose') { st.results[idx] = 'lose'; st.payout = (st.payout ?? 0) - was; }
-  }
-  st.payout = Math.max(0, Math.min(st.payout!, cap));
 }
 
 async function renderBlackjack(i: TI, sid: string, st: BJState) {
@@ -779,8 +797,13 @@ async function renderBlackjack(i: TI, sid: string, st: BJState) {
   // 払戻しを先に済ませてから描く (残高の表示を正しくするため)
   if (done) {
     if (!test) {
-      await applyBJClamp(st);
+      // 最後の保険: settleDealer が reshuffle で収まり切らなかった場合に備え、
+      // 自分の予約を外した状態での cap で silent にクランプする。
+      // 画面の役 / results は変えず、金額だけ削る (user には "引きが弱かった" に見える)。
+      const cap = housePayoutCapSync(sid);
+      if ((st.payout ?? 0) > cap) st.payout = Math.max(0, cap);
       credit(uid, st.payout ?? 0, entry.mix, 'win:blackjack', sid);
+      clearCrapsExposure(sid);
     }
     sessions.drop(sid);
   } else {
@@ -826,6 +849,8 @@ function vpHoldButtons(st: VPHand, sid: string): ActionRowBuilder<ButtonBuilder>
 async function playVideoPoker(i: TI, r: Round) {
   const st = startVP();
   const entry = sessions.create(r.uid, 'videopoker', st, r.bet, r.mix, r.test);
+  // BET 時点で Royal Flush (×800) までの払戻しを予約
+  if (!r.test) setCrapsExposure(entry.id, r.bet * MAX_GROSS_MULT.videopoker);
   await renderVideoPoker(i, entry.id, st);
 }
 
@@ -847,8 +872,9 @@ export async function onVideoPokerAction(i: ButtonInteraction, action: 'hold' | 
   if (busy.has(k)) return i.deferUpdate().catch(() => {});
   busy.add(k);
   try {
+    // DRAW は "cap 読み → 役決定 → クランプ" を atomic に。await は結果を描画する段で入れる
+    if (st.phase === 'deal') drawVPWithCap(st, entry.bet, capForSync(!!entry.test, sid!));
     await ack(i);
-    if (st.phase === 'deal') drawVPWithCap(st, entry.bet, await capFor(!!entry.test));
     await renderVideoPoker(i, sid!, st);
   } finally {
     busy.delete(k);
@@ -867,9 +893,10 @@ async function renderVideoPoker(i: TI, sid: string, st: VPHand) {
   if (st.phase === 'drawn') {
     let payout = 0;
     if (mult > 0) {
-      payout = test ? Math.floor(entry.bet * mult) : await clampPayout(Math.floor(entry.bet * mult));
+      payout = test ? Math.floor(entry.bet * mult) : Math.min(Math.floor(entry.bet * mult), housePayoutCapSync(sid));
       if (!test) credit(uid, payout, entry.mix, 'win:videopoker', sid);
     }
+    if (!test) clearCrapsExposure(sid);
     sessions.drop(sid);
     const res = resultLine(entry.bet, payout);
     await show(i, { game: 'videopoker', uid, prefs: p, test, board, result: `${rankLabel ? `**${rankLabel}**  ` : ''}${res.text}`, color: res.color });
@@ -926,7 +953,7 @@ async function playMines(i: TI, r: Round) {
   if (!r.test) {
     // 上限は BET の時点で判断する。最大額が運営の払える額に収まらなければ始めずに返金し、
     // 収まればその額を最後まで確保しておく (ゲームの途中で止まることはない)
-    const cap = await housePayoutCap(entry.id);
+    const cap = housePayoutCapSync(entry.id);
     if (minesMaxPayout(st, r.bet) > cap) {
       sessions.drop(entry.id);
       credit(r.uid, r.bet, r.mix, 'refund:mines:cap');
@@ -985,7 +1012,7 @@ async function renderMines(i: TI, sid: string, notice?: string) {
     let payout = 0;
     if (st.phase === 'cashed') {
       payout = minesPayout(entry.bet, st.size, st.mines, k);
-      if (!test) { payout = await clampPayout(payout, sid); credit(uid, payout, entry.mix, 'win:mines', sid); }
+      if (!test) { payout = clampPayoutSync(payout, sid); credit(uid, payout, entry.mix, 'win:mines', sid); }
     }
     clearCrapsExposure(sid);
     sessions.drop(sid);
@@ -1241,7 +1268,7 @@ export async function onCrapsAction(i: ButtonInteraction, action: 'roll' | 'undo
       await new Promise(ok => setTimeout(ok, 600));
     }
 
-    const report = crapsRoll(st, await capFor(test, sid!));
+    const report = crapsRoll(st, capForSync(test, sid!));
     st.lastRoll = [report.d1, report.d2];
     let total = 0;
     const stay: CrapsBet[] = [];
@@ -1262,7 +1289,7 @@ export async function onCrapsAction(i: ButtonInteraction, action: 'roll' | 'undo
     if (total > 0) {
       if (!test) {
         const raw = total;
-        total = await clampPayout(raw, sid!);
+        total = clampPayoutSync(raw, sid!);
         let remaining = total;
         const winners = report.resolutions.filter(r => r.payout > 0);
         winners.forEach((r, idx) => {

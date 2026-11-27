@@ -36,6 +36,35 @@ function totalCrapsExposure(exceptSessionId) {
     return s;
 }
 /**
+ * 同期で "今の運営の残高の合計 (JPY 換算)" を返す。外部 API に触らず、`balance_cached` と DB だけを読む。
+ * BET の判定 → 結果決定 → 予約 のあいだに await を挟まないために使う (JS single-thread で atomic になる)。
+ */
+export function totalLiquidityJpySync() {
+    let paypay = 0, ltc = 0;
+    for (const w of wallets.listWallets()) {
+        if (!w.enabled)
+            continue;
+        const jpy = Math.max(0, w.balance_cached ?? 0);
+        if (w.kind === 'paypay')
+            paypay += jpy;
+        else if (w.kind === 'ltc' && w.address)
+            ltc += jpy;
+    }
+    return { paypay, ltc, total: paypay + ltc };
+}
+/** `housePayoutCap` の同期版。BET を受けた瞬間に atomic で呼ぶためのもの。 */
+export function housePayoutCapSync(exceptSessionId) {
+    const liq = totalLiquidityJpySync();
+    const outstanding = db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get().s;
+    return Math.max(0, liq.total - outstanding - totalCrapsExposure(exceptSessionId));
+}
+/** `clampPayout` の同期版。 */
+export function clampPayoutSync(amount, exceptSessionId) {
+    if (amount <= 0)
+        return 0;
+    return Math.min(amount, housePayoutCapSync(exceptSessionId));
+}
+/**
  * 全ウォレットの流動性 (JPY)。ローカル `balance_cached` を唯一の真実とする。
  * 外部システム (PayPay API / BlockCypher) の反映遅延に依らず、入出金の都度 adjustCached で
  * 更新されているローカル帳簿を参照する。opts.refresh=true の時だけ外部と同期する。
