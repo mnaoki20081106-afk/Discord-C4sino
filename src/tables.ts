@@ -21,7 +21,7 @@ import { spinWithCap, reelStrip } from './games/slots.js';
 import { spinRouletteWithCap, payoutMult as rouPayout, type BetKind as RouKind } from './games/roulette.js';
 import { dealBaccaratWithCap, payoutMult as bacPayout, type Side as BacSide } from './games/baccarat.js';
 import { startVP, drawVPWithCap, payoutFor, type VPHand } from './games/videopoker.js';
-import { newCraps, addBet, roll as crapsRoll, openExposure, type CrapsBetKind, type CrapsState, type CrapsBet } from './games/craps.js';
+import { newCraps, addBet, roll as crapsRoll, rollDie, openExposure, isLocked, type CrapsBetKind, type CrapsState, type CrapsBet } from './games/craps.js';
 import { MINES_SIZES, newMines, parseOpt as minesOpt, optOf as minesOptOf, multiplier as minesMult, payoutOf as minesPayout, openCell, openedCount, safeCount, type MinesSize, type MinesState } from './games/mines.js';
 import {
   formatBlackjack, formatSlots, formatRoulette, formatBaccarat, formatVideoPoker,
@@ -33,7 +33,7 @@ import * as ach from './achievements.js';
 import { MIN_BET_CHIPS, MAX_BET_CHIPS } from './payments/limits.js';
 import { L } from './ui/leet.js';
 import { emoji, emojiRef } from './ui/emoji-ids.js';
-import { COLOR, GAME_ICON } from './ui/theme.js';
+import { COLOR, GAME_ICON, ICON } from './ui/theme.js';
 
 export type Game = 'blackjack' | 'slots' | 'roulette' | 'baccarat' | 'videopoker' | 'craps' | 'mines';
 export const GAMES: readonly Game[] = ['blackjack', 'slots', 'roulette', 'baccarat', 'videopoker', 'craps', 'mines'];
@@ -118,6 +118,14 @@ const CRAPS_KINDS: ReadonlyArray<readonly [CrapsBetKind, string]> = [
   ['acedeuce',   'Ace-Deuce 3 (×16) — ワンロール'],
   ['boxcars',    'Boxcars 12 (×31) — ワンロール'],
 ] as const;
+
+/** その局面でしか置けない賭け (書いていない種類はいつでも置ける) */
+const CRAPS_WHEN: Partial<Record<CrapsBetKind, 'comeout' | 'point'>> = {
+  pass: 'comeout', dontpass: 'comeout',
+  pass_odds: 'point', dontpass_odds: 'point', come: 'point', dontcome: 'point',
+};
+/** 賭けの表示名 ('Pass Line (×2) — …' → 'Pass Line') */
+const crapsName = (k: CrapsBetKind) => CRAPS_KINDS.find(([v]) => v === k)?.[1].split(' (')[0].split(' — ')[0] ?? k;
 
 const VP_RANK_LABEL: Record<string, string> = {
   royal_flush: 'Royal Flush', straight_flush: 'Straight Flush', four_of_a_kind: 'Four of a Kind',
@@ -241,6 +249,8 @@ interface View {
   primary?: ActionRowBuilder<ButtonBuilder>;
   fields?: Field[];
   sid?: string;
+  /** クラップス: 今の局面 (選択メニューに出す賭けが変わる) */
+  phase?: 'comeout' | 'point';
   /** ゲーム中の盤面だけ出す (マインスイーパーはマスのボタンで段を使い切るため) */
   bare?: boolean;
 }
@@ -279,7 +289,7 @@ function minesOptionRows(p: Prefs, disabled: boolean): ActionRowBuilder<StringSe
   return [new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(size), new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(count)];
 }
 
-function optionsRow(game: Game, p: Prefs, disabled: boolean, sid?: string): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder> | null {
+function optionsRow(game: Game, p: Prefs, disabled: boolean, sid?: string, phase: 'comeout' | 'point' = 'comeout'): ActionRowBuilder<ButtonBuilder | StringSelectMenuBuilder> | null {
   if (game === 'baccarat') {
     return new ActionRowBuilder<ButtonBuilder>().addComponents(
       BAC_SIDES.map(([side, label]) => new ButtonBuilder()
@@ -300,7 +310,8 @@ function optionsRow(game: Game, p: Prefs, disabled: boolean, sid?: string): Acti
   if (game === 'craps') {
     return new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
       new StringSelectMenuBuilder().setCustomId(sid ? `cr:add:${sid}` : 'cr:add').setPlaceholder('賭けの種類を選ぶと、今の BET 額で台に置きます').setDisabled(disabled)
-        .addOptions(CRAPS_KINDS.map(([v, l]) => new StringSelectMenuOptionBuilder().setValue(v).setLabel(l.slice(0, 100)))),
+        .addOptions(CRAPS_KINDS.filter(([v]) => !CRAPS_WHEN[v] || CRAPS_WHEN[v] === phase)
+          .map(([v, l]) => new StringSelectMenuOptionBuilder().setValue(v).setLabel(l.slice(0, 100)))),
     );
   }
   return null;
@@ -351,7 +362,7 @@ function renderTable(v: View) {
     return { content: '', embeds: [embed], components: rows.slice(0, 5), files: [], attachments: [] };
   }
   if (v.game === 'mines') rows.push(...minesOptionRows(v.prefs, !!v.inRound));
-  const o = optionsRow(v.game, v.prefs, !!v.inRound && v.game !== 'craps', v.sid);
+  const o = optionsRow(v.game, v.prefs, !!v.inRound, v.sid, v.phase);
   if (o) rows.push(o);
   if (v.actions) rows.push(...v.actions);
   rows.push(betBarRow(v.game, v.prefs, !!v.inRound));
@@ -1020,44 +1031,108 @@ async function renderMines(i: TI, sid: string, notice?: string) {
 
 /* ────────────── CRAPS ────────────── */
 
-function crapsView(uid: string, sid: string, st: CrapsState, notice?: string): View {
+/** 盤面のすぐ下に出す、ワンタップの賭け (今の BET 額でそのまま台に置く) */
+const CRAPS_QUICK: Record<'comeout' | 'point', Array<[CrapsBetKind, string]>> = {
+  comeout: [['pass', 'PASS'], ['dontpass', "DON'T PASS"], ['field', 'FIELD'], ['any7', 'ANY 7']],
+  point:   [['pass_odds', 'ODDS'], ['come', 'COME'], ['dontcome', "DON'T COME"], ['field', 'FIELD']],
+};
+const isCrapsKind = (s: string): s is CrapsBetKind => CRAPS_KINDS.some(([k]) => k === s);
+
+/** 再起動したときの返金に使う保存データを、台の上の BET に合わせる */
+function syncCrapsEntry(entry: NonNullable<ReturnType<typeof sessions.get>>, st: CrapsState) {
+  const stake = st.bets.reduce((n, b) => n + b.amount, 0);
+  entry.bet = entry.test ? 0 : stake;
+  entry.mix = entry.test || stake === 0 || !st.bets.every(b => b.mix) ? undefined
+    : st.bets.reduce((m, b) => ({ pp: m.pp + b.mix!.pp, ltc: m.ltc + b.mix!.ltc }), { pp: 0, ltc: 0 });
+}
+
+/** 外した BET を、置いたときの PayPay / LTC の内訳のまま戻す */
+function refundCrapsBet(uid: string, sid: string, b: CrapsBet, reason: string) {
+  if (b.mix) applyMix(uid, b.mix.pp, b.mix.ltc, reason, sid);
+  else txCredit(uid, b.amount, reason, sid);
+}
+
+function crapsBetLine(b: CrapsBet): string {
+  return `\`#${b.id}\` ${crapsName(b.kind)}${b.point ? ` (${b.point})` : ''} **¥${b.amount.toLocaleString()}**${isLocked(b) ? '  _確定_' : ''}`;
+}
+
+function crapsView(uid: string, sid: string, st: CrapsState, notice?: string, rolling?: [number, number]): View {
   const entry = sessions.get(sid);
-  const net = st.totalReturned - st.totalWagered;
+  const p = getPrefs(uid, 'craps');
   const header = st.phase === 'comeout'
     ? '**COME OUT** — 7/11 勝ち / 2/3/12 クラップス / 4-10 point 成立'
     : `**POINT ${st.point}** — ${st.point} 再出で Pass 勝ち / 7 で Seven-Out`;
+  const dice = rolling ?? st.lastRoll;
+  const board = dice ? `${crapsDiceLine(dice[0], dice[1])}\n${rolling ? `**${L('ROLLING')}…**` : header}` : header;
+
+  // 直近の ROLL の結果。ほかのゲームと同じ WIN / LOSE / PUSH の行に、BET ごとの結果を添える
+  let result: string | undefined;
+  let color: number = st.phase === 'comeout' ? COLOR.violet : COLOR.purple;
+  const lr = rolling ? undefined : st.lastResult;
+  if (lr && st.lastRoll) {
+    const head = `**${st.lastRoll[0] + st.lastRoll[1]}**`;
+    if (lr.resolved > 0 || lr.payout > 0) {
+      const res = resultLine(lr.wager, lr.payout);
+      color = res.color;
+      result = [`${head}  ${res.text}`, ...lr.lines].join('\n');
+    } else {
+      result = [`${head}  **決着なし** — BET は台に残っています`, ...lr.lines].join('\n');
+    }
+  }
+
+  const stake = st.bets.reduce((n, b) => n + b.amount, 0);
   const betsText = st.bets.length
-    ? st.bets.slice(-10).map(b => `\`#${b.id}\` ${b.kind}${b.point ? `→${b.point}` : ''} **¥${b.amount.toLocaleString()}**`).join('\n') + (st.bets.length > 10 ? `\n…他${st.bets.length - 10}件` : '')
+    ? st.bets.slice(-10).map(crapsBetLine).join('\n') + (st.bets.length > 10 ? `\n…他${st.bets.length - 10}件` : '')
     : '_ベットなし_';
   const hist = st.history.length ? st.history.slice(-5).join('\n') : '_まだ振られていません_';
+  const net = st.totalReturned - (st.totalWagered - stake);
+  const canUndo = st.bets.some(b => !isLocked(b));
+
   return {
     // 台に賭けが載っていれば台の状態 (テスト/本番) を、空の台なら次に賭けるときの設定を表示する
-    game: 'craps', uid, prefs: getPrefs(uid, 'craps'), test: st.totalWagered > 0 ? !!entry?.test : undefined, sid, notice,
-    board: st.lastRoll ? `${crapsDiceLine(st.lastRoll[0], st.lastRoll[1])}\n${header}` : header,
-    color: st.phase === 'comeout' ? COLOR.violet : COLOR.purple,
+    game: 'craps', uid, prefs: p, sid, notice, board, result, color, phase: st.phase, inRound: !!rolling,
+    test: st.totalWagered > 0 || st.bets.length > 0 ? !!entry?.test : undefined,
     fields: [
-      { name: `台の上のベット (${st.bets.length})`, value: betsText.slice(0, 1024) },
+      { name: `台の上のベット (${st.bets.length})${stake ? `  ¥${stake.toLocaleString()}` : ''}`, value: betsText.slice(0, 1024) },
       { name: '直近の振り', value: hist.slice(-1000) },
-      { name: 'この台の累計', value: `${signedYen(net)} (賭 ¥${st.totalWagered.toLocaleString()} / 戻 ¥${st.totalReturned.toLocaleString()})` },
+      { name: 'この台の累計', value: `${signedYen(net)} (賭 ¥${(st.totalWagered - stake).toLocaleString()} / 戻 ¥${st.totalReturned.toLocaleString()})` },
     ],
+    actions: [new ActionRowBuilder<ButtonBuilder>().addComponents(
+      CRAPS_QUICK[st.phase].map(([k, label]) => new ButtonBuilder()
+        .setCustomId(`cr:q:${k}:${sid}`).setLabel(L(label)).setStyle(ButtonStyle.Secondary).setDisabled(!!rolling)))],
     primary: new ActionRowBuilder<ButtonBuilder>().addComponents(
-      withEmoji(new ButtonBuilder().setCustomId(`cr:roll:${sid}`).setLabel('ROLL').setStyle(ButtonStyle.Primary).setDisabled(st.bets.length === 0), 'game_craps'),
-      new ButtonBuilder().setCustomId(`cr:undo:${sid}`).setLabel('直前のベット取消').setStyle(ButtonStyle.Secondary).setDisabled(st.bets.length === 0),
-      new ButtonBuilder().setCustomId(`cr:end:${sid}`).setLabel('END').setStyle(ButtonStyle.Secondary),
+      withEmoji(new ButtonBuilder().setCustomId(`cr:roll:${sid}`).setLabel(L('ROLL')).setStyle(ButtonStyle.Primary).setDisabled(!!rolling || st.bets.length === 0), 'game_craps'),
+      new ButtonBuilder().setCustomId(`cr:undo:${sid}`).setLabel('直前のベット取消').setStyle(ButtonStyle.Secondary).setDisabled(!!rolling || !canUndo),
+      new ButtonBuilder().setCustomId(`cr:clear:${sid}`).setLabel('すべて外す').setStyle(ButtonStyle.Secondary).setDisabled(!!rolling || !canUndo),
+      new ButtonBuilder().setCustomId(`cr:end:${sid}`).setLabel('END').setStyle(ButtonStyle.Secondary).setDisabled(!!rolling),
     ),
   };
 }
 
-/** 新しいクラップスの台を開く (ack 済みの前提)。 */
+/** 本人の進行中の台 (あれば) */
+function activeCraps(uid: string): string | null {
+  return sessions.listByUser(uid).find(e => e.game === 'craps')?.id ?? null;
+}
+
+/** クラップスの台を開く (ack 済みの前提)。進行中の台があれば、新しく作らずその続きを出す。 */
 async function openCrapsTable(i: TI, notice?: string) {
+  const live = activeCraps(i.user.id);
+  if (live) {
+    const st = sessions.get(live)!.state as CrapsState;
+    return show(i, crapsView(i.user.id, live, st, notice ?? (st.bets.length ? '進行中の台の続きです' : undefined)));
+  }
+  return openFreshCrapsTable(i, notice);
+}
+
+async function openFreshCrapsTable(i: TI, notice?: string) {
   const st = newCraps();
   const entry = sessions.create(i.user.id, 'craps', st, 0);
   setCrapsExposure(entry.id, 0);
   return show(i, crapsView(i.user.id, entry.id, st, notice));
 }
 
-/** 賭けの種類を選んだら、今の BET 額でその場に置く。 */
-async function onCrapsAdd(i: StringSelectMenuInteraction | ModalSubmitInteraction, kind: CrapsBetKind) {
+/** 賭けの種類を選ぶ / クイック BET を押したら、今の BET 額でその場に置く。 */
+async function onCrapsAdd(i: TI, kind: CrapsBetKind) {
   const uid = i.user.id;
   let p = getPrefs(uid, 'craps');
   if (p.test && !canTestPlay(i)) { p = { ...p, test: false }; savePrefs(uid, 'craps', p); }
@@ -1068,7 +1143,8 @@ async function onCrapsAdd(i: StringSelectMenuInteraction | ModalSubmitInteractio
   await ack(i);
   const sid = sidOf(i);
   const entry = sid ? sessions.get(sid) : undefined;
-  if (!entry || entry.discordId !== uid) return openCrapsTable(i, '台が見つからなかったので新しい台を開きました。もう一度賭けの種類を選んでください');
+  if (!entry || entry.discordId !== uid || entry.game !== 'craps') return openCrapsTable(i, '台が見つからなかったので台を開き直しました。もう一度賭けの種類を選んでください');
+  if (busy.has(key(uid, 'craps'))) return;                // ROLL 中は受けない
   const st = entry.state as CrapsState;
   const test = p.test;
   const amount = test ? TEST_BET : p.pp + p.ltc;
@@ -1076,7 +1152,7 @@ async function onCrapsAdd(i: StringSelectMenuInteraction | ModalSubmitInteractio
   const fail = (msg: string) => show(i, crapsView(uid, sid!, st, msg));
 
   if (amount < lim.min || amount > lim.max) return fail(`BET は ¥${lim.min.toLocaleString()} 〜 ¥${lim.max.toLocaleString()} です`);
-  if (st.totalWagered > 0 && !!entry.test !== test) {
+  if ((st.totalWagered > 0 || st.bets.length > 0) && !!entry.test !== test) {
     return fail(entry.test
       ? 'この台はテストプレイ中です。本番で賭けるには END で台を閉じてください'
       : 'この台は本番です。テストプレイするには END で台を閉じてください');
@@ -1095,62 +1171,94 @@ async function onCrapsAdd(i: StringSelectMenuInteraction | ModalSubmitInteractio
   const mix = test ? undefined : { pp: p.pp, ltc: p.ltc };
   if (mix) applyMix(uid, -mix.pp, -mix.ltc, `bet:craps:${kind}`, sid!);
   addBet(st, kind, amount, mix);
+  st.lastResult = undefined;
   if (!test) setCrapsExposure(sid!, openExposure(st));
+  syncCrapsEntry(entry, st);
   sessions.save(sid!);
   return show(i, crapsView(uid, sid!, st));
 }
 
-/** cr:roll / cr:undo / cr:end */
-export async function onCrapsAction(i: ButtonInteraction, action: 'roll' | 'undo' | 'end') {
+/** cr:roll / cr:undo / cr:clear / cr:end / cr:q:<賭けの種類> */
+export async function onCrapsAction(i: ButtonInteraction, action: 'roll' | 'undo' | 'clear' | 'end' | 'q', arg?: string) {
   assertNotBanned(i.user.id);
   const uid = i.user.id;
+  if (action === 'q') {
+    if (!arg || !isCrapsKind(arg)) { await i.deferUpdate().catch(() => {}); return; }
+    return onCrapsAdd(i, arg);
+  }
   const sid = sidOf(i);
   const entry = sid ? sessions.get(sid) : undefined;
   await ack(i);
-  if (!entry || entry.discordId !== uid) return openCrapsTable(i, '前の台は終了しています。新しい台を開きました');
+  if (!entry || entry.discordId !== uid || entry.game !== 'craps') return openCrapsTable(i, '前の台は終了しています');
   const st = entry.state as CrapsState;
   const test = !!entry.test;
+  const k = key(uid, 'craps');
+  if (busy.has(k)) return;                                  // ROLL 中は他の操作を受けない
+  const view = (notice?: string) => show(i, crapsView(uid, sid!, st, notice));
+  const after = () => {
+    if (!test) setCrapsExposure(sid!, openExposure(st));
+    syncCrapsEntry(entry, st);
+    sessions.save(sid!);
+  };
 
   if (action === 'undo') {
-    const last = st.bets.pop();
-    if (last) {
-      if (!test) {
-        if (last.mix) applyMix(uid, last.mix.pp, last.mix.ltc, 'bet:craps:undo', sid!);
-        else txCredit(uid, last.amount, 'bet:craps:undo', sid!);
-        setCrapsExposure(sid!, openExposure(st));
-      }
-      st.totalWagered -= last.amount;
-    }
-    sessions.save(sid!);
-    return show(i, crapsView(uid, sid!, st));
+    // 一番新しい、外せる BET を 1 つ戻す (振られた Pass / Come は確定なので戻さない)
+    let idx = -1;
+    for (let n = st.bets.length - 1; n >= 0; n--) if (!isLocked(st.bets[n])) { idx = n; break; }
+    if (idx < 0) return view('戻せるベットがありません (振られた Pass / Come は決着まで外せません)');
+    const [b] = st.bets.splice(idx, 1);
+    if (!test) refundCrapsBet(uid, sid!, b, 'bet:craps:undo');
+    st.totalWagered -= b.amount;
+    st.lastResult = undefined;
+    after();
+    return view();
   }
 
-  if (action === 'end') {
+  if (action === 'clear' || action === 'end') {
+    const gone = st.bets.filter(b => !isLocked(b));
+    st.bets = st.bets.filter(isLocked);
+    for (const b of gone) { if (!test) refundCrapsBet(uid, sid!, b, 'bet:craps:takedown'); st.totalWagered -= b.amount; }
+    const back = gone.reduce((n, b) => n + b.amount, 0);
+    if (gone.length) st.lastResult = undefined;
+    after();
+    if (action === 'clear') {
+      return view(gone.length ? `${gone.length} 件のベット (¥${back.toLocaleString()}) を外しました` : '外せるベットがありません (振られた Pass / Come は決着まで外せません)');
+    }
+    if (st.bets.length) return view('Pass / Come が決着するまで END できません。ROLL で決着させてください');
     clearCrapsExposure(sid!);
     sessions.drop(sid!);
     const net = st.totalReturned - st.totalWagered;
-    return openCrapsTable(i, `前の台の累計: ${signedYen(net)} (賭 ¥${st.totalWagered.toLocaleString()} / 戻 ¥${st.totalReturned.toLocaleString()})${st.bets.length ? '。台に残っていたベットは返金されません' : ''}`);
+    return openFreshCrapsTable(i, `前の台の累計: ${signedYen(net)} (賭 ¥${st.totalWagered.toLocaleString()} / 戻 ¥${st.totalReturned.toLocaleString()})${back ? `。外したベット ¥${back.toLocaleString()} は返金済み` : ''}`);
   }
 
   // roll
-  if (st.bets.length === 0) return show(i, crapsView(uid, sid!, st, 'ベットがありません'));
-  const k = key(uid, 'craps');
-  if (busy.has(k)) return;
+  if (st.bets.length === 0) return view('ベットがありません');
   busy.add(k);
   try {
+    // 転がる演出 (ほかのゲームの回転と同じく 2 コマ)
+    for (let f = 0; f < 2; f++) {
+      await show(i, crapsView(uid, sid!, st, undefined, [rollDie(), rollDie()]));
+      await new Promise(ok => setTimeout(ok, 600));
+    }
+
     const report = crapsRoll(st, await capFor(test, sid!));
     st.lastRoll = [report.d1, report.d2];
     let total = 0;
     const stay: CrapsBet[] = [];
     for (const r of report.resolutions) {
       if (r.payout > 0) total += r.payout;
-      if (r.stay) { if (r.pointMoved) r.bet.point = r.pointMoved; stay.push(r.bet); }
+      if (r.stay) {
+        if (r.pointMoved) r.bet.point = r.pointMoved;
+        r.bet.rolled = (r.bet.rolled ?? 0) + 1;
+        stay.push(r.bet);
+      }
     }
     st.bets = stay;
     if (report.phaseChange === 'pointSet') { st.phase = 'point'; st.point = report.newPoint; }
     if (report.phaseChange === 'pointHit' || report.phaseChange === 'seven_out') { st.phase = 'comeout'; st.point = undefined; }
 
     // 各ベットの払戻しは、そのベットを出した PayPay / LTC の比率で戻す
+    const paid = new Map<number, number>();
     if (total > 0) {
       if (!test) {
         const raw = total;
@@ -1160,22 +1268,45 @@ export async function onCrapsAction(i: ButtonInteraction, action: 'roll' | 'undo
         winners.forEach((r, idx) => {
           const share = idx === winners.length - 1 ? remaining : Math.floor(r.payout * total / raw);
           remaining -= share;
+          paid.set(r.bet.id, share);
           credit(uid, share, r.bet.mix, 'win:craps', sid!);
         });
+      } else {
+        for (const r of report.resolutions) if (r.payout > 0) paid.set(r.bet.id, r.payout);
       }
       st.totalReturned += total;
     }
+
+    // BET ごとの結果 (決着したもの・ポイントが付いたもの)
+    const lines: string[] = [];
+    let wager = 0, resolved = 0;
+    for (const r of report.resolutions) {
+      const b = r.bet, got = paid.get(b.id) ?? 0;
+      const name = `${crapsName(b.kind)}${b.point && !r.pointMoved ? ` (${b.point})` : ''} ¥${b.amount.toLocaleString()}`;
+      if (!r.stay) {
+        wager += b.amount; resolved++;
+        if (got > b.amount)        lines.push(`${ICON.arrow()} ${name} — **WIN** +¥${(got - b.amount).toLocaleString()}`);
+        else if (got === b.amount) lines.push(`${ICON.arrow()} ${name} — **PUSH**`);
+        else                       lines.push(`${ICON.arrow()} ${name} — LOSE`);
+      } else if (got > 0) {
+        lines.push(`${ICON.arrow()} ${name} — **WIN** +¥${got.toLocaleString()} (BET は台に残ります)`);
+      } else if (r.pointMoved) {
+        lines.push(`${ICON.arrow()} ${name} — POINT ${r.pointMoved}`);
+      }
+    }
+    st.lastResult = { lines: lines.length > 10 ? [...lines.slice(0, 10), `…他${lines.length - 10}件`] : lines, wager, payout: total, resolved };
+
     st.history.push(report.log);
     if (st.history.length > 20) st.history.shift();
     if (!test) setCrapsExposure(sid!, openExposure(st));
+    syncCrapsEntry(entry, st);
     sessions.save(sid!);
 
-    const wager = report.resolutions.reduce((s, r) => s + (r.stay ? 0 : r.bet.amount), 0);
     await show(i, crapsView(uid, sid!, st));
     const settledBets = report.resolutions.filter(r => !r.stay);
-    const crapsMix = settledBets.every(r => r.bet.mix)
+    const crapsMix = settledBets.length && settledBets.every(r => r.bet.mix)
       ? settledBets.reduce((m, r) => ({ pp: m.pp + r.bet.mix!.pp, ltc: m.ltc + r.bet.mix!.ltc }), { pp: 0, ltc: 0 }) : undefined;
-    const wonKinds = [...new Set(report.resolutions.filter(r => r.payout > 0).map(r => CRAPS_KINDS.find(([k]) => k === r.bet.kind)?.[1].split(' (')[0] ?? r.bet.kind))];
+    const wonKinds = [...new Set(report.resolutions.filter(r => r.payout > 0).map(r => crapsName(r.bet.kind)))];
     await settled(i, 'craps', wager, total, test, { mix: crapsMix, detail: `${report.d1 + report.d2} が出た — ${wonKinds.join(' / ')}` });
   } finally {
     busy.delete(k);

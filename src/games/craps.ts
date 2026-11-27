@@ -31,6 +31,18 @@ export interface CrapsBet {
   amount: number;
   point?: number;    // come/dontcome の確立済みポイント
   mix?: { pp: number; ltc: number };  // この BET を PayPay / LTC 由来からいくらずつ出したか
+  rolled?: number;   // この BET が台に残ったまま振られた回数
+}
+
+/** 1 回でも振られた Pass / Come は外せない (ポイントを見てから返金で逃げられないように)。 */
+export const isLocked = (b: CrapsBet) => (b.rolled ?? 0) > 0 && (b.kind === 'pass' || b.kind === 'come');
+
+/** 直近の ROLL の結果 (画面の再表示用) */
+export interface CrapsLastResult {
+  lines: string[];
+  wager: number;     // 決着した BET の元の額の合計
+  payout: number;    // 実際に戻した額の合計
+  resolved: number;  // 決着した BET の数
 }
 
 export interface CrapsState {
@@ -42,6 +54,7 @@ export interface CrapsState {
   history: string[];        // 最近 8 行
   totalWagered: number;
   totalReturned: number;
+  lastResult?: CrapsLastResult;
 }
 
 export function newCraps(): CrapsState {

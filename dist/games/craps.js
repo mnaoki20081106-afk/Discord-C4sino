@@ -12,6 +12,8 @@ export const MULT = {
     any7: 5, anycraps: 8,
     yo11: 16, snakeeyes: 31, acedeuce: 16, boxcars: 31,
 };
+/** 1 回でも振られた Pass / Come は外せない (ポイントを見てから返金で逃げられないように)。 */
+export const isLocked = (b) => (b.rolled ?? 0) > 0 && (b.kind === 'pass' || b.kind === 'come');
 export function newCraps() {
     return { phase: 'comeout', nextBetId: 1, bets: [], history: [], totalWagered: 0, totalReturned: 0 };
 }
