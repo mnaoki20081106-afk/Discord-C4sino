@@ -107,7 +107,7 @@ export const EMOJI_IDS = {
     "slot_star": "1574229412013015120",
     "deco_fire": "1575511983036432485",
     "game_baccarat": "1575511987390124104",
-    "game_blackjack": "1575511991706067097",
+    "game_blackjack": "1575714202654609518", // 2026-11 描き直し (Discord 上の名前は game_blackjack_v2)
     "game_craps": "1575712613210394624", // 2026-11 描き直し (Discord 上の名前は game_craps_v2)
     "game_mines": "1575558495997268048",
     "win_crown": "1575577315872743597",
