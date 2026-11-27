@@ -1665,13 +1665,18 @@ async function pollOperatorLtc() {
                 await notifyServerPanels(ltcUnmatchedEmbed(address, tx.txid, tx.valueSat));
                 continue;
             }
+            // 申請時のレートで決めた円と、今のレートで換算した円のうち、小さい方を credit する。
+            // レートが下がったときだけ送って運営の LTC を安く買う "無料の put" を防ぐ。
+            // 市況レートが取れないときは申請の円を使う (レートが取れないのに credit を止めると入金が詰まるため)。
+            const marketJpy = rate ? Math.floor((tx.valueSat / 1e8) * rate) : null;
+            const credited = marketJpy !== null ? Math.min(req.jpy, marketJpy) : req.jpy;
             try {
                 db.transaction(() => {
                     db.prepare(`INSERT INTO deposits(discord_id, method, amount_jpy, amount_raw, tx_ref, status, confirmed_at)
             VALUES (?, 'ltc', ?, ?, ?, 'confirmed', strftime('%s','now'))`)
-                        .run(req.discord_id, req.jpy, String(tx.valueSat), tx.txid);
+                        .run(req.discord_id, credited, String(tx.valueSat), tx.txid);
                     ltcMatch.markCredited(req.id, tx.txid);
-                    creditRail(req.discord_id, 'ltc', req.jpy, 'deposit:ltc', tx.txid);
+                    creditRail(req.discord_id, 'ltc', credited, 'deposit:ltc', tx.txid);
                 })();
             }
             catch (e) {
@@ -1680,7 +1685,7 @@ async function pollOperatorLtc() {
             }
             invalidateLiquidityCache();
             const user = await client.users.fetch(req.discord_id).catch(() => null);
-            await user?.send(`LTC ${ltcMatch.satToLtc(tx.valueSat)} の着金を確認しました。¥${req.jpy.toLocaleString()} を残高に加えました。`).catch(() => { });
+            await user?.send(`LTC ${ltcMatch.satToLtc(tx.valueSat)} の着金を確認しました。¥${credited.toLocaleString()} を残高に加えました。`).catch(() => { });
         }
     }
 }
