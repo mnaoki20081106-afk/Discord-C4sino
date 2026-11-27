@@ -108,7 +108,7 @@ export const EMOJI_IDS = {
     "deco_fire": "1575511983036432485",
     "game_baccarat": "1575511987390124104",
     "game_blackjack": "1575511991706067097",
-    "game_craps": "1575513326455357551",
+    "game_craps": "1575712613210394624", // 2026-11 描き直し (Discord 上の名前は game_craps_v2)
     "game_mines": "1575558495997268048",
     "win_crown": "1575577315872743597",
     "win_star": "1575577320050270421",
@@ -123,7 +123,7 @@ export const EMOJI_IDS = {
     "mines_gem": "1575558504226230343",
     "mines_tile": "1575558508143714436",
     "game_roulette": "1575517259550564363",
-    "game_slots": "1575512004590960780",
+    "game_slots": "1575712616867823689", // 2026-11 描き直し (Discord 上の名前は game_slots_v2)
     "game_videopoker": "1575512008508317739",
     "pay_ltc": "1575520758371975248",
     "pay_paypay": "1575520763828510743",
@@ -159,7 +159,7 @@ export const EMOJI_IDS = {
     "adm_wallet": "1575528682376659004"
 };
 /** 動く (GIF) 絵文字。Discord では `<a:name:id>` と書かないと動かない。 */
-export const ANIMATED = new Set(["deco_fire", "game_slots", "pay_ltc", "pay_paypay", "win_crown", "win_star"]);
+export const ANIMATED = new Set(["deco_fire", "pay_ltc", "pay_paypay", "win_crown", "win_star"]);
 /** Discord 絵文字タグを返す (動く絵文字は `<a:name:id>`)。存在しない name は空文字。 */
 export function emoji(name) {
     const id = EMOJI_IDS[name];
