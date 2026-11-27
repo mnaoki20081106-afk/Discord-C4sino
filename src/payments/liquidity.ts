@@ -19,120 +19,24 @@ export const MAX_GROSS_MULT: Record<GameMultKey, number> = {
   craps:     31,     // 30:1 snake-eyes / boxcars (最大)
 };
 
-/** PayPay 由来 / LTC 由来の内訳 (円)。運営の残高は、この 2 つを混ぜずに別々に数える。 */
-export interface Rails { pp: number; ltc: number }
-
-/** BET の内訳で払戻しを PayPay / LTC に分ける。`payoutByMix` (db/schema.ts) と同じ丸め方。 */
-export function splitByMix(amount: number, mix?: Rails): Rails {
-  if (amount <= 0) return { pp: 0, ltc: 0 };
-  const total = mix ? mix.pp + mix.ltc : 0;
-  if (!mix || total <= 0) return { pp: amount, ltc: 0 };
-  const ltc = Math.floor(amount * mix.ltc / total);
-  return { pp: amount - ltc, ltc };
-}
-
 /**
- * 進行中のゲーム (全ゲーム): 払う可能性のある最大額を session ID ごとに持ち、
+ * クラップスとマインスイーパー: 進行中のセッションが払う可能性のある額を session ID ごとに持ち、
  * 他の人の上限計算から差し引く (同時に遊ばれても合計で運営の残高を超えないため)。
- * PayPay 由来の分は運営の PayPay、LTC 由来の分は運営の LTC だけに充てる。
+ * Craps 専用だった名前のまま、マインスイーパーも同じ表を使う。
+ * 以下は元の説明: アクティブなセッションの未決済最大 gross 合計を管理し、
+ * 合算で流動性を超えないよう検査する。
  */
-const exposures = new Map<string, Rails>();
-export function setExposure(sessionId: string, rails: Rails) {
-  exposures.set(sessionId, { pp: Math.max(0, rails.pp), ltc: Math.max(0, rails.ltc) });
+const crapsExposures = new Map<string, number>();
+export function setCrapsExposure(sessionId: string, maxGross: number) {
+  crapsExposures.set(sessionId, maxGross);
 }
-export function clearExposure(sessionId: string) {
-  exposures.delete(sessionId);
-}
-/** 金額 1 つ + 内訳で確保する版 (マインスイーパー用)。 */
-export function setCrapsExposure(sessionId: string, maxGross: number, mix?: Rails) {
-  setExposure(sessionId, splitByMix(maxGross, mix));
-}
-export const clearCrapsExposure = clearExposure;
-
-function exposureTotals(exceptSessionId?: string): Rails {
-  let pp = 0, ltc = 0;
-  for (const [id, v] of exposures) if (id !== exceptSessionId) { pp += v.pp; ltc += v.ltc; }
-  return { pp, ltc };
+export function clearCrapsExposure(sessionId: string) {
+  crapsExposures.delete(sessionId);
 }
 function totalCrapsExposure(exceptSessionId?: string): number {
-  const t = exposureTotals(exceptSessionId);
-  return t.pp + t.ltc;
-}
-
-/** 運営ウォレットの帳簿残高 (JPY) を PayPay / LTC 別に。ローカル帳簿 (`balance_cached`) を都度読む同期処理。 */
-export function railLiquidity(): Rails {
-  let pp = 0, ltc = 0;
-  for (const w of wallets.listWallets()) {
-    if (!w.enabled) continue;
-    const jpy = Math.max(0, w.balance_cached ?? 0);
-    if (w.kind === 'paypay') pp += jpy;
-    else if (w.kind === 'ltc' && w.address) ltc += jpy;
-  }
-  return { pp, ltc };
-}
-
-/** ユーザーが持っているチップの合計 (PayPay 由来 / LTC 由来) = 運営の債務。 */
-export function railOutstanding(): Rails {
-  const r = db.prepare('SELECT COALESCE(SUM(pp_reserve),0) pp, COALESCE(SUM(ltc_reserve),0) ltc FROM users').get() as Rails;
-  return { pp: r.pp, ltc: r.ltc };
-}
-
-/**
- * 「運営が今この瞬間にあと払える額」を PayPay / LTC 別に返す (同期)。
- *   運営ウォレット − ユーザーのチップ − 他の進行中のゲームが確保している額
- * exceptSessionId の台は自分の分なので差し引かない。
- */
-export function railCap(exceptSessionId?: string): Rails {
-  const L = railLiquidity(), O = railOutstanding(), X = exposureTotals(exceptSessionId);
-  return { pp: Math.max(0, L.pp - O.pp - X.pp), ltc: Math.max(0, L.ltc - O.ltc - X.ltc) };
-}
-
-/** need が cap に収まるか。収まらないレールがあれば、その不足額も返す。 */
-export function railShortfall(need: Rails, cap: Rails): { ok: boolean; pp: number; ltc: number } {
-  const pp = Math.max(0, need.pp - cap.pp), ltc = Math.max(0, need.ltc - cap.ltc);
-  return { ok: pp === 0 && ltc === 0, pp, ltc };
-}
-
-/**
- * この BET の内訳で払うとき、PayPay / LTC のどちらも運営の払える額を超えない最大の払戻し額。
- * 内訳が無い (壊れたデータ) 場合は、どちらのレールで払っても足りる額にする。
- */
-export function maxPayoutForMix(mix: Rails | undefined, exceptSessionId?: string): number {
-  const cap = railCap(exceptSessionId);
-  const total = mix ? mix.pp + mix.ltc : 0;
-  if (!mix || total <= 0) return Math.min(cap.pp, cap.ltc);
-  let hi = Number.MAX_SAFE_INTEGER;
-  if (mix.pp > 0)  hi = Math.min(hi, Math.floor(cap.pp * total / mix.pp));
-  if (mix.ltc > 0) hi = Math.min(hi, Math.floor(cap.ltc * total / mix.ltc));
-  // 丸めで 1 円ずれても超えないよう、実際の分け方で確かめる
-  while (hi > 0) {
-    const s = splitByMix(hi, mix);
-    if (s.pp <= cap.pp && s.ltc <= cap.ltc) break;
-    hi--;
-  }
-  return Math.max(0, hi);
-}
-
-/**
- * BET を受ける前の判定: この BET の最大払戻し (元の額込み) が、運営の払える額に収まるか。
- * BET の元の額は引き落としで運営の債務から外れるので、そのぶん (mix.pp / mix.ltc) は余裕に足す。
- */
-export function maxGrossFits(maxGross: number, mix: Rails, exceptSessionId?: string): boolean {
-  const need = splitByMix(maxGross, mix), cap = railCap(exceptSessionId);
-  return need.pp <= cap.pp + mix.pp && need.ltc <= cap.ltc + mix.ltc;
-}
-
-/** 同じ PayPay / LTC の比率のまま置ける最大の BET 額 (最大払戻しが BET の maxMult 倍のとき)。 */
-export function maxBetFor(maxMult: number, mix: Rails, exceptSessionId?: string): number {
-  const total = mix.pp + mix.ltc;
-  if (total <= 0 || maxMult <= 0) return 0;
-  const fits = (b: number) => maxGrossFits(Math.ceil(b * maxMult), splitByMix(b, mix), exceptSessionId);
-  let lo = 0, hi = total;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (fits(mid)) lo = mid; else hi = mid - 1;
-  }
-  return lo;
+  let s = 0;
+  for (const [id, v] of crapsExposures) if (id !== exceptSessionId) s += v;
+  return s;
 }
 
 /**
@@ -192,9 +96,8 @@ export async function totalLiquidityJpy(opts?: { refresh?: boolean }): Promise<{
 export async function assertOperatorWithdrawSafe(amountJpy: number, kind: 'paypay'|'ltc'): Promise<string | null> {
   const liq = await cachedLiquidity();
   const outstanding = (db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get() as any).s as number;
-  // 進行中のゲーム (マインスイーパー・クラップス・BJ・VP) が払う可能性のある額も、引き出せる額から除く
-  const resX = exposureTotals();
-  const reserved = resX.pp + resX.ltc;
+  // 進行中のゲーム (マインスイーパー・クラップス) が払う可能性のある額も、引き出せる額から除く
+  const reserved = totalCrapsExposure();
   const effectiveAfter = liq.total - outstanding - reserved - amountJpy;
   if (effectiveAfter < 0) {
     const max = Math.max(0, liq.total - outstanding - reserved);
@@ -208,13 +111,10 @@ export async function assertOperatorWithdrawSafe(amountJpy: number, kind: 'paypa
       : 'SELECT COALESCE(SUM(ltc_reserve),0) s FROM users'
   ).get() as { s: number };
   const walletRailJpy = kind === 'paypay' ? liq.paypay : liq.ltc;
-  // そのレールの進行中のゲームの確保分も、そのレールの残高から守る (PayPay と LTC を混ぜない)
-  const railReserved = kind === 'paypay' ? resX.pp : resX.ltc;
-  const railNeed = reservesByRail.s + railReserved;
-  if (walletRailJpy - amountJpy < railNeed) {
-    const deficit = railNeed - (walletRailJpy - amountJpy);
+  if (walletRailJpy - amountJpy < reservesByRail.s) {
+    const deficit = reservesByRail.s - (walletRailJpy - amountJpy);
     return `${kind.toUpperCase()} 側で ¥${deficit.toLocaleString()} 分不足します ` +
-      `(${kind.toUpperCase()} 残高 ¥${walletRailJpy.toLocaleString()} − 引き出し ¥${amountJpy.toLocaleString()} < ${kind.toUpperCase()} 由来チップ ¥${reservesByRail.s.toLocaleString()} + 進行中のゲームで確保 ¥${railReserved.toLocaleString()})`;
+      `(${kind.toUpperCase()} 残高 ¥${walletRailJpy.toLocaleString()} − 引き出し ¥${amountJpy.toLocaleString()} < ${kind.toUpperCase()} 由来チップ ¥${reservesByRail.s.toLocaleString()})`;
   }
   return null;
 }
@@ -236,32 +136,29 @@ export function invalidateLiquidityCache() { _cache = null; }
 export async function operatorWithdrawable(): Promise<{ max: number; total: number; outstanding: number; reserved: number }> {
   const liq = await cachedLiquidity();
   const outstanding = (db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get() as any).s as number;
-  const X = exposureTotals();
-  const reserved = X.pp + X.ltc;
+  const reserved = totalCrapsExposure();
   return { max: Math.max(0, liq.total - outstanding - reserved), total: liq.total, outstanding, reserved };
 }
 
+/** ベット額 × 最大倍率 ≤ 流動性 を満たすか検査。失敗時は投げる。 */
 /**
  * 「ハウスが今この瞬間に払える gross 上限」。bet は既に台に乗っている想定で、
  * 実際に wallet から流出するのは payout - その bet 分だが、安全側に effective 全体を返す。
- *
- * mix (その BET の PayPay / LTC 内訳) を渡すと、PayPay 由来は運営の PayPay 残高、LTC 由来は運営の LTC 残高
- * だけで判定する (混ぜない)。mix を渡さない呼び出しは従来どおり合計で判定する。
  */
-export async function housePayoutCap(exceptSessionId?: string, mix?: Rails): Promise<number> {
-  if (mix) return maxPayoutForMix(mix, exceptSessionId);
+export async function housePayoutCap(exceptCrapsSession?: string): Promise<number> {
   const liq = await cachedLiquidity();
   const outstanding = (db.prepare('SELECT COALESCE(SUM(balance),0) s FROM users').get() as any).s as number;
-  return Math.max(0, liq.total - outstanding - totalCrapsExposure(exceptSessionId));
+  const otherCraps = totalCrapsExposure(exceptCrapsSession);
+  return Math.max(0, liq.total - outstanding - otherCraps);
 }
 
 /**
  * 最終防衛線: 実際に chip 加算する直前に呼ぶ。
  * 現在の housePayoutCap を越えないよう amount をクランプして返す。
  */
-export async function clampPayout(amount: number, exceptSessionId?: string, mix?: Rails): Promise<number> {
+export async function clampPayout(amount: number, exceptCrapsSession?: string): Promise<number> {
   if (amount <= 0) return 0;
-  const cap = await housePayoutCap(exceptSessionId, mix);
+  const cap = await housePayoutCap(exceptCrapsSession);
   return Math.min(amount, cap);
 }
 

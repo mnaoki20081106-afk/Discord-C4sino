@@ -11,7 +11,7 @@ import {
   panelLabel, isAdminPanelKey, isLegacyPanelKey, isRulesPanelKey, type InstalledPanel, type WalletRow, type UserSummary, type Notice,
   mwsResetScreen, mwsWarningEmbed, ltcUnmatchedEmbed, salesScreen, type SalesSummary, type SalesPeriod,
 } from './ui/admin-panel.js';
-import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves, applyMix } from './db/schema.js';
+import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
 import * as sessions from './games/session-store.js';
 import {
   openTable, replayInPlace, onTableButton, onTableSelect, onTableModal,
@@ -87,10 +87,9 @@ client.once(Events.ClientReady, async c => {
   }
   // active のまま残っていたセッションを abandoned に遷移 + BET を refund (比率不明時は PP に寄せる)
   try {
-    sessions.recoverActiveSessions((discordId, amount, reason, ref, mix) => {
-      // BET したときの PayPay / LTC の内訳のまま戻す。内訳が残っていない古い行だけ現比率で按分する。
-      if (mix) applyMix(discordId, mix.pp, mix.ltc, reason, ref);
-      else txCredit(discordId, amount, reason, ref);
+    sessions.recoverActiveSessions((discordId, amount, reason, ref) => {
+      // mix 情報は DB から復元できる (session.mix)。ここでは txCredit で現比率に按分で戻す。
+      txCredit(discordId, amount, reason, ref);
     });
   } catch (e) {
     console.error('[sessions] recover failed:', (e as Error).message);
@@ -846,8 +845,7 @@ async function onButton(i: ButtonInteraction) {
   }
   if (ns === 'mn' && (kind === 'open' || kind === 'cash')) return onMinesAction(i, kind, arg);
   if (ns === 'cr') {
-    if (kind === 'roll' || kind === 'undo' || kind === 'clear' || kind === 'end') return onCrapsAction(i, kind);
-    if (kind === 'q') return onCrapsAction(i, 'q', arg);                  // cr:q:<賭けの種類>:<sid> (クイック BET)
+    if (kind === 'roll' || kind === 'undo' || kind === 'end') return onCrapsAction(i, kind);
     return openTable(i, 'craps');
   }
   if (ns === 'slot') return openTable(i, 'slots');
