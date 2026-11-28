@@ -11,6 +11,7 @@ import { generateDeviceState } from './device.js';
 import { generatePkcePair, generateCodeVerifier } from './pkce.js';
 import { extractLinkId, parseRequestId, stripPhoneHyphen } from './util.js';
 import { PayPayError, PayPayLoginError, PayPayNetworkError, P2PTemporaryHoldError, } from './errors.js';
+import { AwsWaf } from './aws/index.js';
 export class PayPay {
     access_token = null;
     refresh_token = null;
@@ -97,45 +98,53 @@ export class PayPay {
         });
         const parData = this._raiseIfNotOk(parResp, PayPayNetworkError);
         const requestUri = parData.payload.requestUri;
-        // 2. Authorize
+        // 2. Authorize (1st call) — WAF challenge HTML を取る
         const wvHeaders = webviewHeaders();
-        const authResp = await this._http.get(`${PORTAL}/api/v2/oauth2/authorize`, {
+        const authParams = { client_id: CLIENT_ID, request_uri: requestUri };
+        const authResp1 = await this._http.get(`${PORTAL}/api/v2/oauth2/authorize`, {
             headers: wvHeaders,
-            params: { client_id: CLIENT_ID, request_uri: requestUri },
+            params: authParams,
         });
-        if (authResp.status === 202) {
-            await this._bypassWaf(`${PORTAL}/api/v2/oauth2/authorize?client_id=${CLIENT_ID}&request_uri=${requestUri}`);
+        const html1 = typeof authResp1.data === 'string' ? authResp1.data : String(authResp1.data ?? '');
+        if (!html1.includes('window.gokuProps')) {
+            throw new PayPayLoginError(`authorize response from PayPay did not contain WAF challenge (HTTP ${authResp1.status})`);
         }
-        else if (authResp.status !== 200) {
-            throw new PayPayNetworkError(`Authorization page failed (HTTP ${authResp.status})`);
+        const { goku_props, host } = AwsWaf.extract(html1);
+        // 3. AWS WAF challenge を解いて aws-waf-token を取得する
+        const waf = new AwsWaf(goku_props, host, 'www.paypay.ne.jp');
+        const wafToken = await waf.getToken();
+        if (!wafToken)
+            throw new PayPayLoginError('AWSに負けました');
+        await this._jar.setCookie(`aws-waf-token=${wafToken}; Domain=www.paypay.ne.jp; Path=/`, 'https://www.paypay.ne.jp');
+        // 4. Authorize (2nd call, allow_redirects=False) — "Found. Redirecting to" が返れば成功
+        const authResp2 = await this._http.get(`${PORTAL}/api/v2/oauth2/authorize`, {
+            headers: wvHeaders,
+            params: authParams,
+            maxRedirects: 0,
+        });
+        const html2 = typeof authResp2.data === 'string' ? authResp2.data : String(authResp2.data ?? '');
+        if (!html2.includes('Found. Redirecting to') && !(authResp2.status >= 300 && authResp2.status < 400)) {
+            throw new PayPayLoginError('AWSに負けました');
         }
-        // 3. サインインページ
+        // 5. サインインページ
         await this._http.get(`${PORTAL}/oauth2/sign-in`, {
             headers: wvHeaders,
             params: { client_id: CLIENT_ID, mode: 'landing' },
         });
-        // 4. PAR check
+        // 6. PAR check
         const parCheckHdrs = apiHeaders(`${PORTAL}/oauth2/sign-in?client_id=${CLIENT_ID}&mode=landing`);
         const parCheck = (await this._http.get(`${PORTAL}/api/v2/oauth2/par/check`, { headers: parCheckHdrs })).data;
         this._check(parCheck);
-        // 5. パスワード送信
+        // 7. パスワード送信
         const pwResp = (await this._http.post(`${PORTAL}/api/v2/oauth2/sign-in/password`, { username: phone, password, signInAttemptCount: 1 }, { headers: apiHeaders(`${PORTAL}/oauth2/sign-in?client_id=${CLIENT_ID}&mode=landing`) })).data;
         this._check(pwResp);
-        // 6. 分岐
+        // 8. 分岐
         if (hasDeviceUuid) {
             await this._exchangeCode(pwResp);
         }
         else {
             await this._startOtlFlow();
         }
-    }
-    async _bypassWaf(_url) {
-        // paython-wrapper は Selenium headless Chrome で AWS WAF の JS チャレンジを解いて
-        // cookie を session に流し込んでいた。Node 版では Puppeteer を使う必要があるが
-        // MWS (メモリ 400MB) では Chromium を立てられない。
-        //
-        // → 運用: ローカル開発機で token を 1 回取得して DB に保存 → 本番は refresh で回す。
-        throw new PayPayNetworkError('WAF bypass is not supported in this Node port. Obtain access_token / refresh_token on a dev machine (puppeteer + headless Chrome) and pass them to new PayPay({ access_token, refresh_token }).');
     }
     async _exchangeCode(pwResp) {
         const rawUri = pwResp?.payload?.redirectUrl;
