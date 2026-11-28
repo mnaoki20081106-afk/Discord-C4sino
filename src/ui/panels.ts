@@ -79,7 +79,7 @@ export function publicGamePanel(game: Game) {
  * 残高カード。各パネルの [残高] ボタンで使う。
  * 合計と、PayPay 由来 / LTC 由来の割合を絵文字のゲージで出す。
  */
-export async function balanceReply(pp: number, ltc: number, note?: string) {
+export async function balanceReply(pp: number, ltc: number, note?: string, wagerCredit?: number) {
   const total = pp + ltc;
   const share = (n: number) => (total > 0 ? ` (${((n / total) * 100).toFixed(1)}%)` : '');
   const lines = [
@@ -89,6 +89,10 @@ export async function balanceReply(pp: number, ltc: number, note?: string) {
     `${ICON.paypay()} PayPay 由来  **¥${pp.toLocaleString()}**${share(pp)}`,
     `${ICON.ltc()} LTC 由来  **¥${ltc.toLocaleString()}**${share(ltc)}`,
   ];
+  if (wagerCredit !== undefined) {
+    const cap = Math.max(0, Math.min(wagerCredit, total));
+    lines.push(`${ICON.chip()} 出金可能額  **¥${cap.toLocaleString()}**`);
+  }
   if (note) lines.push('', note);
   const embed = new EmbedBuilder()
     .setColor(COLOR.violet)

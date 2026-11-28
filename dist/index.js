@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, Partials, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, Events, PermissionFlagsBits, EmbedBuilder, ButtonBuilder, ButtonStyle, MessageFlags, } from 'discord.js';
 import { adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal, panelLabel, isAdminPanelKey, isLegacyPanelKey, isRulesPanelKey, mwsResetScreen, mwsWarningEmbed, ltcUnmatchedEmbed, salesScreen, } from './ui/admin-panel.js';
-import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves, applyMix } from './db/schema.js';
+import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves, applyMix, getWagerCredit } from './db/schema.js';
 import * as sessions from './games/session-store.js';
 import { openTable, replayInPlace, onTableButton, onTableSelect, onTableModal, onBlackjackAction, onVideoPokerAction, onCrapsAction, onMinesAction, isGame, setTablesClient, } from './tables.js';
 import { depositPanel, depositMethodPicker, withdrawMethodPicker, balanceReply, leetPanel, mwsPanel, replayRowFromCtx, publicGamePanel } from './ui/panels.js';
@@ -561,7 +561,7 @@ async function cmdAdmin(i) {
         const openWd = db.prepare(`SELECT id, method, amount_jpy, status, created_at FROM withdrawals WHERE discord_id=? AND status IN ('pending','sent','failed') ORDER BY created_at DESC LIMIT 10`).all(u.id);
         const activeSessions = sessions.listByUser(u.id);
         const sum = (rows, m) => rows.find(x => x.method === m)?.s ?? 0;
-        const payload = await balanceReply(r.pp, r.ltc);
+        const payload = await balanceReply(r.pp, r.ltc, undefined, getWagerCredit(u.id));
         const embed = new EmbedBuilder()
             .setTitle(`ユーザー総合ビュー`)
             .setColor(ban ? 0xef4444 : 0xd4af37)
@@ -834,7 +834,7 @@ async function onButton(i) {
         return onMwsButton(i, kind);
     if (ns === 'bal') {
         const r = getReserves(i.user.id);
-        const payload = await balanceReply(r.pp, r.ltc);
+        const payload = await balanceReply(r.pp, r.ltc, undefined, getWagerCredit(i.user.id));
         return i.reply({ ...payload, flags: MessageFlags.Ephemeral });
     }
 }

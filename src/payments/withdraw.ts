@@ -1,5 +1,5 @@
 import { Client, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
-import { db, txCredit, getBalance, getReserves, debitRail, creditRail } from '../db/schema.js';
+import { db, txCredit, getBalance, getReserves, debitRail, creditRail, getWagerCredit } from '../db/schema.js';
 import * as pp from './paypay-client.js';
 import * as wallets from './wallets.js';
 import { ltcJpyRate, sendLtc, addressBalanceLtc, addressOutgoingTxs } from './ltc.js';
@@ -28,6 +28,18 @@ function assertRailAvailable(discordId: string, rail: 'pp'|'ltc', amount: number
   }
 }
 
+/** 出金可能額 (wager_credit) が足りるかを確認する。
+ *  1 度も BET されていない chip (入金直後の資金) をそのまま別口座へ流す経路を塞ぐ。 */
+function assertWagerEnough(discordId: string, amount: number) {
+  const wc = getWagerCredit(discordId);
+  if (wc < amount) {
+    throw new Error(
+      `出金可能額が不足しています (出金可能額 ¥${wc.toLocaleString()} / 出金額 ¥${amount.toLocaleString()})\n` +
+      `ゲームでプレイすると、賭けた分だけ出金可能額が増えます。`,
+    );
+  }
+}
+
 /**
  * PayPay 出金: 選ばれたウォレットから送金リンクを生成し、ユーザーに DM。
  * chip は link 生成成功時に即焼却 (link は PayPay 側で 7日有効なので十分)。
@@ -36,6 +48,7 @@ export async function withdrawPayPay(client: Client, r: WithdrawReq): Promise<{ 
   if (r.amountJpy < MIN_WITHDRAW_JPY.paypay) throw new Error(`最低出金額は ¥${MIN_WITHDRAW_JPY.paypay.toLocaleString()} です`);
   if (!hasEnoughChips(r.discordId, r.amountJpy)) throw new Error('chip 残高が不足しています');
   assertRailAvailable(r.discordId, 'pp', r.amountJpy);
+  assertWagerEnough(r.discordId, r.amountJpy);
 
   // 残高十分な PayPay ウォレットを 1 つ選ぶ (usable_balance で絞る)
   const candidates = wallets.listWallets('paypay').filter(w => w.enabled && (w.balance_cached ?? 0) >= r.amountJpy);
@@ -104,10 +117,9 @@ export async function withdrawLtc(client: Client, adminChannelId: string | null,
     throw new Error('LTC アドレスではありません (L / M / ltc1 のみ受付、BTC や他通貨アドレスは拒否)');
   if (!hasEnoughChips(r.discordId, r.amountJpy)) throw new Error('chip 残高が不足しています');
   assertRailAvailable(r.discordId, 'ltc', r.amountJpy);
-
-  // マネロン対策: 入金してすぐ LTC 出金 = 両替所化防止。最低 1 回は BET していること
-  const bets = (db.prepare(`SELECT COUNT(*) c FROM ledger WHERE discord_id=? AND reason LIKE 'bet:%'`).get(r.discordId) as any).c as number;
-  if (bets === 0) throw new Error('LTC 出金には最低 1 回のゲームプレイが必要です (入金直後の LTC 出金はできません)');
+  // マネロン対策: 入金してすぐ別口座へ流す経路を塞ぐ。
+  // 出金可能額 (wager_credit) が出金額に届いていることを要求する (PayPay/LTC 共通)。
+  assertWagerEnough(r.discordId, r.amountJpy);
 
   const rate = await ltcJpyRate();
   const netJpy = Math.max(0, r.amountJpy - LTC_NETWORK_FEE_JPY);
