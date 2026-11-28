@@ -5,6 +5,7 @@ import * as wallets from './wallets.js';
 import { ltcJpyRate, sendLtc, addressBalanceLtc, addressOutgoingTxs } from './ltc.js';
 import { isValidLtcAddress } from './ltc-address.js';
 import { MIN_WITHDRAW_JPY, LTC_NETWORK_FEE_JPY } from './limits.js';
+import { emoji } from '../ui/emoji-ids.js';
 
 export interface WithdrawReq {
   discordId: string;
@@ -287,7 +288,7 @@ export async function recoverLtcBroadcasting(client: Client): Promise<void> {
         try {
           const user = await client.users.fetch(w.discord_id);
           await user.send({ embeds: [new EmbedBuilder().setColor(0x22c55e)
-            .setTitle(`✅ LTC 出金 #${w.id} 送信完了`)
+            .setTitle(`${emoji('pay_ltc')} LTC 出金 #${w.id} 送信完了`)
             .setDescription('ネットワークの反映を確認しました (遅延通知)。')
             .addFields({ name: 'txid', value: `\`${match.txid}\`` })] });
         } catch { /* DM 失敗は致命でない */ }
@@ -308,7 +309,7 @@ export async function recoverLtcBroadcasting(client: Client): Promise<void> {
         try {
           const user = await client.users.fetch(w.discord_id);
           await user.send({ embeds: [new EmbedBuilder().setColor(0xef4444)
-            .setTitle(`⚠️ LTC 出金 #${w.id} — 送信できませんでした`)
+            .setTitle(`${emoji('rule_warn')} LTC 出金 #${w.id} — 送信できませんでした`)
             .setDescription('システムの問題で送信が止まりました。chip は返金しましたので、もう一度やり直してください。')] });
         } catch { /* DM 失敗は致命でない */ }
       } catch (e) {

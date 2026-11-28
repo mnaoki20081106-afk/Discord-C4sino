@@ -65,8 +65,8 @@ export function roll(st, payCap) {
         else if (total === 7)
             phaseChange = 'seven_out';
     }
-    // ログ
-    let line = `🎲 ${d1}+${d2} = ${total}`;
+    // ログ (行頭の絵文字は描画層で custom を付ける。engine は素のテキストだけ返す)
+    let line = `${d1}+${d2} = ${total}`;
     if (phaseChange === 'pointSet')
         line += `  ·  POINT ${total} 成立`;
     if (phaseChange === 'pointHit')

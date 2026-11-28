@@ -1082,7 +1082,9 @@ function crapsView(uid, sid, st, notice, rolling) {
     const betsText = st.bets.length
         ? st.bets.slice(-10).map(crapsBetLine).join('\n') + (st.bets.length > 10 ? `\n…他${st.bets.length - 10}件` : '')
         : '_ベットなし_';
-    const hist = st.history.length ? st.history.slice(-5).join('\n') : '_まだ振られていません_';
+    const hist = st.history.length
+        ? st.history.slice(-5).map(h => `${emoji('game_craps')} ${h}`).join('\n')
+        : '_まだ振られていません_';
     const net = st.totalReturned - (st.totalWagered - stake);
     const canUndo = st.bets.some(b => !isLocked(b));
     return {
