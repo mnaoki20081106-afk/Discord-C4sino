@@ -87,6 +87,16 @@ client.once(Events.ClientReady, async (c) => {
     catch (e) {
         console.error('[automod] cleanup failed:', e.message);
     }
+    // 前のプロセスが LTC の `/txs/send` 中にクラッシュしていたら、broadcasting のまま行が残っている。
+    // chain を見て sent に確定するか、2h 経っていれば refund する。
+    try {
+        await withdraw.recoverLtcBroadcasting(c);
+    }
+    catch (e) {
+        console.error('[withdraw-recover] startup scan failed:', e.message);
+    }
+    // 以後も 15 分間隔で再チェック (運転中に `/txs/send` が長時間 hang した場合の救済)
+    setInterval(() => { withdraw.recoverLtcBroadcasting(client).catch(e => console.error('[withdraw-recover] tick:', e.message)); }, 15 * 60_000);
     // MWS 延長タイマーの定期監視: 10 分間隔で残り時間を確認し、24h/6h/1h 閾値を跨いだら通知
     startMwsTicker();
 });

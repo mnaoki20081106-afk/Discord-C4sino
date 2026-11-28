@@ -220,6 +220,10 @@ try {
   }
 } catch (e) { console.error('[db] withdrawals migration failed:', e); }
 
+// Migration: withdrawals に amount_sat (LTC の送金量、litoshi) を足す。
+// broadcasting のまま BOT がクラッシュしたとき、起動時に chain から回収するために必要。
+try { db.exec(`ALTER TABLE withdrawals ADD COLUMN amount_sat INTEGER`); } catch { /* exists */ }
+
 // Migration: 既存ユーザーに pp_reserve / ltc_reserve が無ければ追加し、
 // 既存 balance を全額 pp_reserve に寄せる (保守的 — LTC 出金は実際の LTC 入金分に限定)
 for (const col of ['pp_reserve INTEGER NOT NULL DEFAULT 0', 'ltc_reserve INTEGER NOT NULL DEFAULT 0']) {

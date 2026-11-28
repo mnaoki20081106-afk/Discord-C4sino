@@ -754,6 +754,12 @@ export async function onBlackjackAction(i: ButtonInteraction, action: 'hit' | 's
   const sid = sidOf(i);
   const entry = sid ? sessions.get(sid) : undefined;
   if (!entry || entry.discordId !== i.user.id) return i.reply({ content: 'この手は終了しています。BET で次のゲームを始めてください', flags: MessageFlags.Ephemeral });
+  // サーバー側の合法手検証: UI 側だけでなく、現在のハンド状態から見ても合法な action のみ許可する。
+  // 古い (差し替え前の) ボタンの再発火や、他クライアントからの不正 action で split / double を悪用されないため。
+  const st0 = entry.state as BJState;
+  if (!availableActions(st0).includes(action)) {
+    return i.reply({ content: 'このアクションは今は取れません', flags: MessageFlags.Ephemeral });
+  }
   const k = key(i.user.id, 'blackjack');
   if (busy.has(k)) return i.deferUpdate().catch(() => {});
   busy.add(k);

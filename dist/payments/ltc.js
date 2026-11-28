@@ -83,6 +83,27 @@ export async function checkDeposits(address) {
 export async function incomingTxs(address) {
     return (await addressFull(address)).incoming;
 }
+export async function addressOutgoingTxs(address) {
+    const token = process.env.LTC_API_TOKEN;
+    const res = await fetch(`${API}/addrs/${address}/full?limit=50${token ? `&token=${token}` : ''}`);
+    if (!res.ok)
+        throw new Error(`full ${res.status}`);
+    const j = await res.json();
+    const out = [];
+    for (const tx of j.txs ?? []) {
+        // address が inputs にある = 外向きの送金
+        if (!(tx.inputs ?? []).some(x => x.addresses?.includes(address)))
+            continue;
+        const outputs = [];
+        for (const o of tx.outputs)
+            for (const a of o.addresses ?? [])
+                if (a !== address)
+                    outputs.push({ address: a, valueSat: o.value });
+        const t = tx.received ? Math.floor(Date.parse(tx.received) / 1000) : Math.floor(Date.now() / 1000);
+        out.push({ txid: tx.hash, confirmations: tx.confirmations, outputs, receivedAt: Number.isFinite(t) ? t : Math.floor(Date.now() / 1000) });
+    }
+    return out;
+}
 /** アドレスの残高 (litoshi、少なめに見積もった値) と、届いた送金。1 回の問い合わせで両方取る。 */
 export async function addressFull(address) {
     const token = process.env.LTC_API_TOKEN;
