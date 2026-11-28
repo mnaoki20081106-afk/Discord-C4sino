@@ -5,6 +5,7 @@ import * as wallets from './wallets.js';
 import { ltcJpyRate, sendLtc, addressBalanceLtc, addressOutgoingTxs } from './ltc.js';
 import { isValidLtcAddress } from './ltc-address.js';
 import { MIN_WITHDRAW_JPY, LTC_NETWORK_FEE_JPY } from './limits.js';
+import { emoji } from '../ui/emoji-ids.js';
 function hasEnoughChips(discordId, amount) {
     return getBalance(discordId) >= amount;
 }
@@ -252,10 +253,12 @@ export async function recoverLtcBroadcasting(client) {
                 console.log(`[withdraw-recover] #${w.id} → sent (chain 確認, txid=${match.txid.slice(0, 16)}…, confirmations=${match.confirmations})`);
                 try {
                     const user = await client.users.fetch(w.discord_id);
-                    await user.send({ embeds: [new EmbedBuilder().setColor(0x22c55e)
-                                .setTitle(`✅ LTC 出金 #${w.id} 送信完了`)
+                    await user.send({ embeds: [new EmbedBuilder()
+                                .setTitle(`${emoji('pay_ltc')} LTC 出金完了 — #${w.id}`)
+                                .setColor(0x22c55e)
                                 .setDescription('ネットワークの反映を確認しました (遅延通知)。')
-                                .addFields({ name: 'txid', value: `\`${match.txid}\`` })] });
+                                .addFields({ name: 'txid', value: `\`${match.txid}\`` })
+                                .setFooter({ text: `Withdrawal #${w.id}` })] });
                 }
                 catch { /* DM 失敗は致命でない */ }
             }
@@ -274,9 +277,11 @@ export async function recoverLtcBroadcasting(client) {
                 console.log(`[withdraw-recover] #${w.id} → refunded (${age}s elapsed, chain に無し)`);
                 try {
                     const user = await client.users.fetch(w.discord_id);
-                    await user.send({ embeds: [new EmbedBuilder().setColor(0xef4444)
-                                .setTitle(`⚠️ LTC 出金 #${w.id} — 送信できませんでした`)
-                                .setDescription('システムの問題で送信が止まりました。chip は返金しましたので、もう一度やり直してください。')] });
+                    await user.send({ embeds: [new EmbedBuilder()
+                                .setTitle(`${emoji('rule_warn')} LTC 出金 #${w.id} — 送信できませんでした`)
+                                .setColor(0xef4444)
+                                .setDescription('システムの問題で送信が止まりました。chip は返金しましたので、もう一度やり直してください。')
+                                .setFooter({ text: `Withdrawal #${w.id}` })] });
                 }
                 catch { /* DM 失敗は致命でない */ }
             }
