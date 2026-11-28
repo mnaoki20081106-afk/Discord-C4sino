@@ -55,14 +55,20 @@ export function listByUser(discordId: string): Entry[] {
  * BJ/VP/Craps の進行中の chip が再起動で消えないことを保証する。
  * refundBet は index.ts 側から渡す (dep cycle 回避)。
  */
-export function recoverActiveSessions(refundBet: (discordId: string, amount: number, reason: string, ref: string) => void) {
-  const rows = db.prepare(`SELECT id, discord_id, game, bet FROM sessions WHERE status='active'`).all() as Array<{
-    id: string; discord_id: string; game: string; bet: number;
+export function recoverActiveSessions(refundBet: (discordId: string, amount: number, reason: string, ref: string, mix?: BetMix) => void) {
+  const rows = db.prepare(`SELECT id, discord_id, game, bet, mix FROM sessions WHERE status='active'`).all() as Array<{
+    id: string; discord_id: string; game: string; bet: number; mix: string | null;
   }>;
   if (!rows.length) return;
   for (const r of rows) {
     try {
-      if (r.bet > 0) refundBet(r.discord_id, r.bet, `refund:session-abandoned:${r.game}`, r.id);
+      // BET したときの PayPay / LTC の内訳が残っていれば、その内訳のまま返す
+      let mix: BetMix | undefined;
+      try {
+        const j = r.mix ? JSON.parse(r.mix) : null;
+        if (j && Number.isSafeInteger(j.pp) && Number.isSafeInteger(j.ltc) && j.pp >= 0 && j.ltc >= 0 && j.pp + j.ltc > 0) mix = { pp: j.pp, ltc: j.ltc };
+      } catch { /* 壊れた mix は無いものとして扱う */ }
+      if (r.bet > 0) refundBet(r.discord_id, mix ? mix.pp + mix.ltc : r.bet, `refund:session-abandoned:${r.game}`, r.id, mix);
       db.prepare(`UPDATE sessions SET status='abandoned', updated_at=strftime('%s','now') WHERE id=?`).run(r.id);
       console.log(`[sessions] recovered: abandoned+refunded ${r.id} (${r.game}, user=${r.discord_id}, bet=${r.bet})`);
     } catch (e) {

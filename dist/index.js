@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, Partials, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, Events, PermissionFlagsBits, EmbedBuilder, ButtonBuilder, ButtonStyle, MessageFlags, } from 'discord.js';
 import { adminHub, gamesLanding, walletLanding, serverLanding, gamesScreen, walletScreen, serverHome, ngScreen, userScreen, opsScreen, confirmScreen, adminModal, panelLabel, isAdminPanelKey, isLegacyPanelKey, isRulesPanelKey, mwsResetScreen, mwsWarningEmbed, ltcUnmatchedEmbed, salesScreen, } from './ui/admin-panel.js';
-import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves } from './db/schema.js';
+import { db, getBalance, txCredit, ensureUser, isBanned, assertNotBanned, creditRail, getReserves, applyMix, getWagerCredit } from './db/schema.js';
 import * as sessions from './games/session-store.js';
 import { openTable, replayInPlace, onTableButton, onTableSelect, onTableModal, onBlackjackAction, onVideoPokerAction, onCrapsAction, onMinesAction, isGame, setTablesClient, } from './tables.js';
 import { depositPanel, depositMethodPicker, withdrawMethodPicker, balanceReply, leetPanel, mwsPanel, replayRowFromCtx, publicGamePanel } from './ui/panels.js';
@@ -69,9 +69,12 @@ client.once(Events.ClientReady, async (c) => {
     }
     // active のまま残っていたセッションを abandoned に遷移 + BET を refund (比率不明時は PP に寄せる)
     try {
-        sessions.recoverActiveSessions((discordId, amount, reason, ref) => {
-            // mix 情報は DB から復元できる (session.mix)。ここでは txCredit で現比率に按分で戻す。
-            txCredit(discordId, amount, reason, ref);
+        sessions.recoverActiveSessions((discordId, amount, reason, ref, mix) => {
+            // BET したときの PayPay / LTC の内訳のまま戻す。内訳が残っていない古い行だけ現比率で按分する。
+            if (mix)
+                applyMix(discordId, mix.pp, mix.ltc, reason, ref);
+            else
+                txCredit(discordId, amount, reason, ref);
         });
     }
     catch (e) {
@@ -84,6 +87,16 @@ client.once(Events.ClientReady, async (c) => {
     catch (e) {
         console.error('[automod] cleanup failed:', e.message);
     }
+    // 前のプロセスが LTC の `/txs/send` 中にクラッシュしていたら、broadcasting のまま行が残っている。
+    // chain を見て sent に確定するか、2h 経っていれば refund する。
+    try {
+        await withdraw.recoverLtcBroadcasting(c);
+    }
+    catch (e) {
+        console.error('[withdraw-recover] startup scan failed:', e.message);
+    }
+    // 以後も 15 分間隔で再チェック (運転中に `/txs/send` が長時間 hang した場合の救済)
+    setInterval(() => { withdraw.recoverLtcBroadcasting(client).catch(e => console.error('[withdraw-recover] tick:', e.message)); }, 15 * 60_000);
     // MWS 延長タイマーの定期監視: 10 分間隔で残り時間を確認し、24h/6h/1h 閾値を跨いだら通知
     startMwsTicker();
 });
@@ -548,7 +561,7 @@ async function cmdAdmin(i) {
         const openWd = db.prepare(`SELECT id, method, amount_jpy, status, created_at FROM withdrawals WHERE discord_id=? AND status IN ('pending','sent','failed') ORDER BY created_at DESC LIMIT 10`).all(u.id);
         const activeSessions = sessions.listByUser(u.id);
         const sum = (rows, m) => rows.find(x => x.method === m)?.s ?? 0;
-        const payload = await balanceReply(r.pp, r.ltc);
+        const payload = await balanceReply(r.pp, r.ltc, undefined, getWagerCredit(u.id));
         const embed = new EmbedBuilder()
             .setTitle(`ユーザー総合ビュー`)
             .setColor(ban ? 0xef4444 : 0xd4af37)
@@ -795,8 +808,10 @@ async function onButton(i) {
     if (ns === 'mn' && (kind === 'open' || kind === 'cash'))
         return onMinesAction(i, kind, arg);
     if (ns === 'cr') {
-        if (kind === 'roll' || kind === 'undo' || kind === 'end')
+        if (kind === 'roll' || kind === 'undo' || kind === 'clear' || kind === 'end')
             return onCrapsAction(i, kind);
+        if (kind === 'q')
+            return onCrapsAction(i, 'q', arg); // cr:q:<賭けの種類>:<sid> (クイック BET)
         return openTable(i, 'craps');
     }
     if (ns === 'slot')
@@ -819,7 +834,7 @@ async function onButton(i) {
         return onMwsButton(i, kind);
     if (ns === 'bal') {
         const r = getReserves(i.user.id);
-        const payload = await balanceReply(r.pp, r.ltc);
+        const payload = await balanceReply(r.pp, r.ltc, undefined, getWagerCredit(i.user.id));
         return i.reply({ ...payload, flags: MessageFlags.Ephemeral });
     }
 }
@@ -1660,13 +1675,18 @@ async function pollOperatorLtc() {
                 await notifyServerPanels(ltcUnmatchedEmbed(address, tx.txid, tx.valueSat));
                 continue;
             }
+            // 申請時のレートで決めた円と、今のレートで換算した円のうち、小さい方を credit する。
+            // レートが下がったときだけ送って運営の LTC を安く買う "無料の put" を防ぐ。
+            // 市況レートが取れないときは申請の円を使う (レートが取れないのに credit を止めると入金が詰まるため)。
+            const marketJpy = rate ? Math.floor((tx.valueSat / 1e8) * rate) : null;
+            const credited = marketJpy !== null ? Math.min(req.jpy, marketJpy) : req.jpy;
             try {
                 db.transaction(() => {
                     db.prepare(`INSERT INTO deposits(discord_id, method, amount_jpy, amount_raw, tx_ref, status, confirmed_at)
             VALUES (?, 'ltc', ?, ?, ?, 'confirmed', strftime('%s','now'))`)
-                        .run(req.discord_id, req.jpy, String(tx.valueSat), tx.txid);
+                        .run(req.discord_id, credited, String(tx.valueSat), tx.txid);
                     ltcMatch.markCredited(req.id, tx.txid);
-                    creditRail(req.discord_id, 'ltc', req.jpy, 'deposit:ltc', tx.txid);
+                    creditRail(req.discord_id, 'ltc', credited, 'deposit:ltc', tx.txid);
                 })();
             }
             catch (e) {
@@ -1675,7 +1695,7 @@ async function pollOperatorLtc() {
             }
             invalidateLiquidityCache();
             const user = await client.users.fetch(req.discord_id).catch(() => null);
-            await user?.send(`LTC ${ltcMatch.satToLtc(tx.valueSat)} の着金を確認しました。¥${req.jpy.toLocaleString()} を残高に加えました。`).catch(() => { });
+            await user?.send(`LTC ${ltcMatch.satToLtc(tx.valueSat)} の着金を確認しました。¥${credited.toLocaleString()} を残高に加えました。`).catch(() => { });
         }
     }
 }

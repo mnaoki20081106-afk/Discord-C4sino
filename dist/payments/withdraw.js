@@ -1,8 +1,8 @@
 import { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
-import { db, getBalance, getReserves, debitRail, creditRail } from '../db/schema.js';
+import { db, getBalance, getReserves, debitRail, creditRail, getWagerCredit } from '../db/schema.js';
 import * as pp from './paypay-client.js';
 import * as wallets from './wallets.js';
-import { ltcJpyRate, sendLtc, addressBalanceLtc } from './ltc.js';
+import { ltcJpyRate, sendLtc, addressBalanceLtc, addressOutgoingTxs } from './ltc.js';
 import { isValidLtcAddress } from './ltc-address.js';
 import { MIN_WITHDRAW_JPY, LTC_NETWORK_FEE_JPY } from './limits.js';
 function hasEnoughChips(discordId, amount) {
@@ -17,6 +17,15 @@ function assertRailAvailable(discordId, rail, amount) {
             `内部レートで保全されているため、入金したレール分しか出金できません。`);
     }
 }
+/** 出金可能額 (wager_credit) が足りるかを確認する。
+ *  1 度も BET されていない chip (入金直後の資金) をそのまま別口座へ流す経路を塞ぐ。 */
+function assertWagerEnough(discordId, amount) {
+    const wc = getWagerCredit(discordId);
+    if (wc < amount) {
+        throw new Error(`出金可能額が不足しています (出金可能額 ¥${wc.toLocaleString()} / 出金額 ¥${amount.toLocaleString()})\n` +
+            `ゲームでプレイすると、賭けた分だけ出金可能額が増えます。`);
+    }
+}
 /**
  * PayPay 出金: 選ばれたウォレットから送金リンクを生成し、ユーザーに DM。
  * chip は link 生成成功時に即焼却 (link は PayPay 側で 7日有効なので十分)。
@@ -27,6 +36,7 @@ export async function withdrawPayPay(client, r) {
     if (!hasEnoughChips(r.discordId, r.amountJpy))
         throw new Error('chip 残高が不足しています');
     assertRailAvailable(r.discordId, 'pp', r.amountJpy);
+    assertWagerEnough(r.discordId, r.amountJpy);
     // 残高十分な PayPay ウォレットを 1 つ選ぶ (usable_balance で絞る)
     const candidates = wallets.listWallets('paypay').filter(w => w.enabled && (w.balance_cached ?? 0) >= r.amountJpy);
     const w = candidates[0];
@@ -90,17 +100,17 @@ export async function withdrawLtc(client, adminChannelId, r) {
     if (!hasEnoughChips(r.discordId, r.amountJpy))
         throw new Error('chip 残高が不足しています');
     assertRailAvailable(r.discordId, 'ltc', r.amountJpy);
-    // マネロン対策: 入金してすぐ LTC 出金 = 両替所化防止。最低 1 回は BET していること
-    const bets = db.prepare(`SELECT COUNT(*) c FROM ledger WHERE discord_id=? AND reason LIKE 'bet:%'`).get(r.discordId).c;
-    if (bets === 0)
-        throw new Error('LTC 出金には最低 1 回のゲームプレイが必要です (入金直後の LTC 出金はできません)');
+    // マネロン対策: 入金してすぐ別口座へ流す経路を塞ぐ。
+    // 出金可能額 (wager_credit) が出金額に届いていることを要求する (PayPay/LTC 共通)。
+    assertWagerEnough(r.discordId, r.amountJpy);
     const rate = await ltcJpyRate();
     const netJpy = Math.max(0, r.amountJpy - LTC_NETWORK_FEE_JPY);
     const ltcAmount = +(netJpy / rate).toFixed(8);
-    // chip 焼却 → DB 行を pending で作成
-    const stmt = db.prepare(`INSERT INTO withdrawals(discord_id, method, amount_jpy, fee_jpy, net_jpy, dest, status)
-    VALUES (?, 'ltc', ?, ?, ?, ?, 'pending')`);
-    const info = stmt.run(r.discordId, r.amountJpy, LTC_NETWORK_FEE_JPY, netJpy, r.dest);
+    // chip 焼却 → DB 行を pending で作成 (amount_sat を入れておく: 復旧スキャンで chain と照合するキー)
+    const amountSat = Math.floor(ltcAmount * 1e8);
+    const stmt = db.prepare(`INSERT INTO withdrawals(discord_id, method, amount_jpy, fee_jpy, net_jpy, dest, status, amount_sat)
+    VALUES (?, 'ltc', ?, ?, ?, ?, 'pending', ?)`);
+    const info = stmt.run(r.discordId, r.amountJpy, LTC_NETWORK_FEE_JPY, netJpy, r.dest, amountSat);
     const id = info.lastInsertRowid;
     try {
         debitRail(r.discordId, 'ltc', r.amountJpy, 'withdraw:ltc', String(id));
@@ -186,6 +196,97 @@ export function markLtcSent(id, txid) {
     if (r.changes === 0)
         throw new Error('withdrawal not found or already processed');
     return db.prepare('SELECT * FROM withdrawals WHERE id=?').get(id);
+}
+/**
+ * 起動時 (および定期) に呼ぶ: broadcasting のまま残っている LTC 出金を chain から回収する。
+ *
+ * `sendLtc` は 3 ステップ (skeleton 作成 → 署名 → `/txs/send` ブロードキャスト) で、
+ * ステップ 3 の `await` 中に BOT が落ちると DB の status は 'broadcasting' のまま残る。
+ * この時、実際にブロードキャストが成立していたか BOT 側では分からない。
+ *
+ * 対応: 運営ウォレットから出て行った tx を chain に見に行き、
+ *   - (dest, amount_sat) が一致する tx があれば → **sent** に確定 (重複送金防止 + 遅延 DM)
+ *   - 2 時間経っても見つからなければ → 送金は成立していないと判断 → chip を refund
+ *   - それ以外 (まだ 2h 以内) は 'broadcasting' のまま次回に持ち越し (mempool 到達待ち)
+ *
+ * amount_sat が無い古い行は chain 照合ができないので飛ばす (管理者の目視対応)。
+ */
+export async function recoverLtcBroadcasting(client) {
+    const rows = db.prepare(`SELECT id, discord_id, amount_jpy, amount_sat, dest, wallet_id, created_at FROM withdrawals WHERE method='ltc' AND status='broadcasting'`).all();
+    if (rows.length === 0)
+        return;
+    console.log(`[withdraw-recover] ${rows.length} broadcasting row(s) to check`);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const GRACE_SEC = 2 * 3600; // 2 時間: mempool 到達の遅延余裕
+    // 同じ (wallet, address) への問い合わせは 1 回にまとめる (BlockCypher レート制限回避)
+    const outgoingCache = new Map();
+    const getOutgoing = async (addr) => {
+        if (!outgoingCache.has(addr))
+            outgoingCache.set(addr, await addressOutgoingTxs(addr));
+        return outgoingCache.get(addr);
+    };
+    for (const w of rows) {
+        if (!w.dest || !w.amount_sat || !w.wallet_id) {
+            console.warn(`[withdraw-recover] #${w.id}: 不足カラム (dest/amount_sat/wallet_id) — 管理者確認が必要`);
+            continue;
+        }
+        const wallet = wallets.getWallet(w.wallet_id);
+        if (!wallet?.address) {
+            console.warn(`[withdraw-recover] #${w.id}: wallet #${w.wallet_id} 見つからない`);
+            continue;
+        }
+        let outs;
+        try {
+            outs = await getOutgoing(wallet.address);
+        }
+        catch (e) {
+            console.warn(`[withdraw-recover] #${w.id}: chain 照会失敗:`, e.message);
+            continue;
+        }
+        // (dest 宛 + amount_sat 一致 + 時刻がこの出金の作成以降の近辺) の tx を探す
+        const match = outs.find(tx => tx.receivedAt >= w.created_at - 300 &&
+            tx.outputs.some(o => o.address === w.dest && o.valueSat === w.amount_sat));
+        if (match) {
+            const r = db.prepare(`UPDATE withdrawals SET status='sent', tx_ref=?, completed_at=strftime('%s','now') WHERE id=? AND status='broadcasting'`).run(match.txid, w.id);
+            if (r.changes === 1) {
+                console.log(`[withdraw-recover] #${w.id} → sent (chain 確認, txid=${match.txid.slice(0, 16)}…, confirmations=${match.confirmations})`);
+                try {
+                    const user = await client.users.fetch(w.discord_id);
+                    await user.send({ embeds: [new EmbedBuilder().setColor(0x22c55e)
+                                .setTitle(`✅ LTC 出金 #${w.id} 送信完了`)
+                                .setDescription('ネットワークの反映を確認しました (遅延通知)。')
+                                .addFields({ name: 'txid', value: `\`${match.txid}\`` })] });
+                }
+                catch { /* DM 失敗は致命でない */ }
+            }
+            continue;
+        }
+        const age = nowSec - w.created_at;
+        if (age > GRACE_SEC) {
+            // 2h 経っても chain に見当たらない → broadcast は成立していない。chip を元のレールに戻す
+            try {
+                db.transaction(() => {
+                    const r = db.prepare(`UPDATE withdrawals SET status='failed', reason=?, completed_at=strftime('%s','now') WHERE id=? AND status='broadcasting'`)
+                        .run('auto-refund: broadcast not seen on chain after 2h', w.id);
+                    if (r.changes === 1)
+                        creditRail(w.discord_id, 'ltc', w.amount_jpy, 'withdraw:refund:recovery', String(w.id));
+                })();
+                console.log(`[withdraw-recover] #${w.id} → refunded (${age}s elapsed, chain に無し)`);
+                try {
+                    const user = await client.users.fetch(w.discord_id);
+                    await user.send({ embeds: [new EmbedBuilder().setColor(0xef4444)
+                                .setTitle(`⚠️ LTC 出金 #${w.id} — 送信できませんでした`)
+                                .setDescription('システムの問題で送信が止まりました。chip は返金しましたので、もう一度やり直してください。')] });
+                }
+                catch { /* DM 失敗は致命でない */ }
+            }
+            catch (e) {
+                console.error(`[withdraw-recover] #${w.id} refund 失敗:`, e.message);
+            }
+            continue;
+        }
+        console.log(`[withdraw-recover] #${w.id} 保留 (age=${age}s, GRACE=${GRACE_SEC}s まで待つ)`);
+    }
 }
 export function rejectWithdrawal(id, reason) {
     const w = db.prepare(`SELECT * FROM withdrawals WHERE id=? AND status IN ('pending','broadcast_failed')`).get(id);

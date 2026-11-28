@@ -18,7 +18,11 @@ import { extractLinkId, parseRequestId, stripPhoneHyphen, type ProxySpec } from 
 import {
   PayPayError, PayPayLoginError, PayPayNetworkError, P2PTemporaryHoldError,
 } from './errors.js';
-import type { Balance, Profile, LinkInfo, CreatedLink, TokenResponse } from './types.js';
+import type {
+  Balance, Profile, LinkInfo, CreatedLink, TokenResponse,
+  SendMoneyResult, P2PCode, InitializeChatRoom, CashoutResult, P2PUser, BarcodeInfo, PayQRCodeResult,
+} from './types.js';
+import { AwsWaf } from './aws/index.js';
 
 export interface PayPayOptions {
   phone?: string;
@@ -123,32 +127,48 @@ export class PayPay {
     const parData = this._raiseIfNotOk(parResp, PayPayNetworkError);
     const requestUri: string = parData.payload.requestUri;
 
-    // 2. Authorize
+    // 2. Authorize (1st call) — WAF challenge HTML を取る
     const wvHeaders = webviewHeaders();
-    const authResp = await this._http.get(`${PORTAL}/api/v2/oauth2/authorize`, {
+    const authParams = { client_id: CLIENT_ID, request_uri: requestUri };
+    const authResp1 = await this._http.get(`${PORTAL}/api/v2/oauth2/authorize`, {
       headers: wvHeaders,
-      params: { client_id: CLIENT_ID, request_uri: requestUri },
+      params: authParams,
     });
-    if (authResp.status === 202) {
-      await this._bypassWaf(
-        `${PORTAL}/api/v2/oauth2/authorize?client_id=${CLIENT_ID}&request_uri=${requestUri}`
-      );
-    } else if (authResp.status !== 200) {
-      throw new PayPayNetworkError(`Authorization page failed (HTTP ${authResp.status})`);
+    const html1 = typeof authResp1.data === 'string' ? authResp1.data : String(authResp1.data ?? '');
+    if (!html1.includes('window.gokuProps')) {
+      throw new PayPayLoginError(`authorize response from PayPay did not contain WAF challenge (HTTP ${authResp1.status})`);
+    }
+    const { goku_props, host } = AwsWaf.extract(html1);
+
+    // 3. AWS WAF challenge を解いて aws-waf-token を取得する
+    const waf = new AwsWaf(goku_props, host, 'www.paypay.ne.jp');
+    const wafToken = await waf.getToken();
+    if (!wafToken) throw new PayPayLoginError('AWSに負けました');
+    await this._jar.setCookie(`aws-waf-token=${wafToken}; Domain=www.paypay.ne.jp; Path=/`, 'https://www.paypay.ne.jp');
+
+    // 4. Authorize (2nd call, allow_redirects=False) — "Found. Redirecting to" が返れば成功
+    const authResp2 = await this._http.get(`${PORTAL}/api/v2/oauth2/authorize`, {
+      headers: wvHeaders,
+      params: authParams,
+      maxRedirects: 0,
+    });
+    const html2 = typeof authResp2.data === 'string' ? authResp2.data : String(authResp2.data ?? '');
+    if (!html2.includes('Found. Redirecting to') && !(authResp2.status >= 300 && authResp2.status < 400)) {
+      throw new PayPayLoginError('AWSに負けました');
     }
 
-    // 3. サインインページ
+    // 5. サインインページ
     await this._http.get(`${PORTAL}/oauth2/sign-in`, {
       headers: wvHeaders,
       params: { client_id: CLIENT_ID, mode: 'landing' },
     });
 
-    // 4. PAR check
+    // 6. PAR check
     const parCheckHdrs = apiHeaders(`${PORTAL}/oauth2/sign-in?client_id=${CLIENT_ID}&mode=landing`);
     const parCheck = (await this._http.get(`${PORTAL}/api/v2/oauth2/par/check`, { headers: parCheckHdrs })).data;
     this._check(parCheck);
 
-    // 5. パスワード送信
+    // 7. パスワード送信
     const pwResp = (await this._http.post(
       `${PORTAL}/api/v2/oauth2/sign-in/password`,
       { username: phone, password, signInAttemptCount: 1 },
@@ -156,23 +176,12 @@ export class PayPay {
     )).data;
     this._check(pwResp);
 
-    // 6. 分岐
+    // 8. 分岐
     if (hasDeviceUuid) {
       await this._exchangeCode(pwResp);
     } else {
       await this._startOtlFlow();
     }
-  }
-
-  private async _bypassWaf(_url: string): Promise<void> {
-    // paython-wrapper は Selenium headless Chrome で AWS WAF の JS チャレンジを解いて
-    // cookie を session に流し込んでいた。Node 版では Puppeteer を使う必要があるが
-    // MWS (メモリ 400MB) では Chromium を立てられない。
-    //
-    // → 運用: ローカル開発機で token を 1 回取得して DB に保存 → 本番は refresh で回す。
-    throw new PayPayNetworkError(
-      'WAF bypass is not supported in this Node port. Obtain access_token / refresh_token on a dev machine (puppeteer + headless Chrome) and pass them to new PayPay({ access_token, refresh_token }).'
-    );
   }
 
   private async _exchangeCode(pwResp: any): Promise<void> {
@@ -487,6 +496,7 @@ export class PayPay {
       socketConnection: 'P2P',
       theme: pochibukuro ? 'pochibukuro' : theme,
       source: 'sendmoney_home_sns',
+      ackPhoneCallDetected: false,
     };
     if (passcode) payload.passcode = passcode;
 
@@ -502,6 +512,295 @@ export class PayPay {
       chat_room_id: data.payload.chatRoomId,
       order_id: data.payload.orderId,
       raw: data,
+    };
+  }
+
+  /** 特定ユーザー (external_user_id) に対する直接送金。
+   *  S4002 (リスク警告) が返った場合は 5 秒待って ack フラグを立てて再試行する。 */
+  async sendMoney(
+    amount: number,
+    receiverId: string,
+    pochibukuro = false,
+    theme = 'default-sendmoney',
+  ): Promise<SendMoneyResult> {
+    this._requireAuth();
+    const payloadTheme = pochibukuro ? 'pochibukuro' : theme;
+    const build = (ackRiskError: boolean, ackPhoneCallDetected: boolean) => ({
+      amount,
+      theme: payloadTheme,
+      requestId: uuidv4(),
+      externalReceiverId: receiverId,
+      ackRiskError,
+      ackPhoneCallDetected,
+      source: 'sendmoney_history_chat',
+      qrCodeId: '',
+      metricMetadata: { timestamp: Date.now() / 1000 },
+    });
+
+    let resp = (await this._http.post(`${P2P}/v3/executeP2PSendMoney`, build(false, false), {
+      headers: this._headers,
+      params: this._params,
+    })).data;
+    if (typeof resp !== 'object') throw new PayPayNetworkError('日本以外からは接続できません');
+    if (resp?.header?.resultCode === 'S4002') {
+      await new Promise(ok => setTimeout(ok, 5000));
+      resp = (await this._http.post(`${P2P}/v3/executeP2PSendMoney`, build(true, true), {
+        headers: this._headers,
+        params: this._params,
+      })).data;
+      if (typeof resp !== 'object') throw new PayPayNetworkError('日本以外からは接続できません');
+    }
+    this._check(resp);
+    return { chat_room_id: resp.payload.chatRoomId, order_id: resp.payload.orderId, raw: resp };
+  }
+
+  /** send_message: 指定チャットルームへのテキスト送信。 */
+  async sendMessage(chatRoomId: string, message: string): Promise<any> {
+    this._requireAuth();
+    const payload = {
+      channelUrl: chatRoomId,
+      message,
+      socketConnection: 'P2P',
+      metricMetadata: { timestamp: Date.now() / 1000 },
+    };
+    const resp = (await this._http.post(`${P2P}/v1/sendP2PMessage`, payload, {
+      headers: this._headers, params: this._params,
+    })).data;
+    this._check(resp);
+    return resp;
+  }
+
+  /** create_p2pcode: 受け取り用 QR コード (金額任意) を発行。 */
+  async createP2PCode(amount?: number): Promise<P2PCode> {
+    this._requireAuth();
+    const payload: Record<string, any> = { amount: null, sessionId: null };
+    if (amount) {
+      payload.amount = amount;
+      payload.sessionId = uuidv4();
+    }
+    const resp = (await this._http.post(`${BFF}/v1/createP2PCode`, payload, {
+      headers: this._headers, params: this._params,
+    })).data;
+    this._check(resp);
+    return { p2pcode: resp.payload.p2pCode, raw: resp };
+  }
+
+  /** set_money_priority: PayPay マネー優先 / マネーライト優先の切り替え。 */
+  async setMoneyPriority(paypayMoney = false): Promise<any> {
+    this._requireAuth();
+    const payload = { moneyPriority: paypayMoney ? 'MONEY_FIRST' : 'MONEY_LITE_FIRST' };
+    const resp = (await this._http.post(`${P2P}/v1/setMoneyPriority`, payload, {
+      headers: this._headers, params: { payPayLang: 'ja' },
+    })).data;
+    this._check(resp);
+    return resp;
+  }
+
+  /** get_chat_rooms: P2P チャットルーム一覧 (最大 size 件)。 */
+  async getChatRooms(size = 20, lastMessage = true): Promise<any> {
+    this._requireAuth();
+    const params = {
+      pageSize: String(size),
+      customTypes: 'P2P_CHAT,P2P_OLD,P2P_CHAT_INACTIVE,P2P_LINK,P2P_PUBLIC_GROUP_CHAT',
+      requiresLastMessage: String(lastMessage),
+      socketConnection: 'P2P',
+      payPayLang: 'ja',
+    };
+    const resp = (await this._http.get(`${P2P}/v1/getP2PChatRoomListLite`, {
+      headers: this._headers, params,
+    })).data;
+    this._check(resp);
+    return resp;
+  }
+
+  /** get_chat_room_messages: 指定チャットルームのメッセージ一覧。 */
+  async getChatRoomMessages(chatRoomId: string, prev = 15, next = 0, include = false): Promise<any> {
+    this._requireAuth();
+    const params = {
+      chatRoomId,
+      include: String(include),
+      prev: String(prev),
+      next: String(next),
+      payPayLang: 'ja',
+    };
+    const resp = (await this._http.get(`${P2P}/v1/getP2PMessageList`, {
+      headers: this._headers, params,
+    })).data;
+    this._check(resp);
+    return resp;
+  }
+
+  /** get_history: 取引履歴 (任意で CASHBACK のみ)。 */
+  async getHistory(size = 20, cashback = false): Promise<any> {
+    this._requireAuth();
+    const params: Record<string, string> = {
+      pageSize: String(size),
+      orderTypes: cashback ? 'CASHBACK' : '',
+      paymentMethodTypes: '',
+      signUpCompletedAt: '2021-01-02T10:16:24Z',
+      isOverdraftOnly: 'false',
+      payPayLang: 'ja',
+    };
+    const resp = (await this._http.get(`${BFF}/v4/getPaymentHistory`, {
+      headers: this._headers, params,
+    })).data;
+    this._check(resp);
+    return resp;
+  }
+
+  /** get_point_history: ポイント (CASHBACK) 履歴のみ。 */
+  async getPointHistory(): Promise<any> {
+    this._requireAuth();
+    const params = {
+      pageSize: '20',
+      orderTypes: 'CASHBACK',
+      paymentMethodTypes: '',
+      signUpCompletedAt: '2021-01-02T10:16:24Z',
+      pointType: 'REGULAR',
+      isOverdraftOnly: 'false',
+      payPayLang: 'ja',
+    };
+    const resp = (await this._http.get(`${BFF}/v4/getPaymentHistory`, {
+      headers: this._headers, params,
+    })).data;
+    this._check(resp);
+    return resp;
+  }
+
+  /** search_p2puser: external_user_id 検索。is_global=true でグローバル検索。 */
+  async searchP2PUser(userId: string, size = 10, isGlobal = false, order = 0): Promise<P2PUser> {
+    this._requireAuth();
+    const payload: Record<string, any> = {
+      searchTerm: userId,
+      pageToken: '',
+      pageSize: size,
+      isIngressSendMoney: false,
+      searchTypes: isGlobal ? 'GLOBAL_SEARCH' : 'FRIEND_AND_CANDIDATE_SEARCH',
+    };
+    const resp = (await this._http.post(`${P2P}/v3/searchP2PUser`, payload, {
+      headers: this._headers, params: this._params,
+    })).data;
+    this._check(resp);
+    if (resp.payload.searchResultEnum === 'NO_USERS_FOUND') {
+      throw new PayPayError('ユーザーが見つかりませんでした', resp);
+    }
+    let name: string, icon: string, external_user_id: string;
+    if (isGlobal) {
+      const r = resp.payload.globalSearchResult;
+      name = r.displayName; icon = r.photoUrl; external_user_id = r.externalId;
+    } else {
+      const r = resp.payload.friendsAndCandidatesSearchResults.friends[order];
+      name = r.displayName; icon = r.photoUrl; external_user_id = r.externalId;
+    }
+    return { name, icon, external_user_id, raw: resp };
+  }
+
+  /** initialize_chatroom: 指定ユーザー (external_user_id) とのチャットルームを初期化。 */
+  async initializeChatRoom(externalUserId: string): Promise<InitializeChatRoom> {
+    this._requireAuth();
+    const payload = {
+      returnChatRoom: true,
+      shouldCheckMessageForFriendshipAppeal: true,
+      externalUserId,
+      socketConnection: 'P2P',
+    };
+    const resp = (await this._http.post(`${P2P}/v1/initialiseOneToOneAndLinkChatRoom`, payload, {
+      headers: this._headers, params: this._params,
+    })).data;
+    this._check(resp);
+    return { chatroom_id: resp.payload.chatRoom.chatRoomId, raw: resp };
+  }
+
+  /** get_barcode_info: 支払い用 QR 情報取得。 */
+  async getBarcodeInfo(url: string): Promise<BarcodeInfo> {
+    this._requireAuth();
+    const params = { code: url, payPayLang: 'ja' };
+    const resp = (await this._http.get(`${BFF}/v2/getBarcodeInfo`, {
+      headers: this._headers, params,
+    })).data;
+    this._check(resp);
+    const u = resp.payload.userCodeInfo;
+    return {
+      amount: u.amount,
+      user_name: u.userInfo.displayName,
+      external_user_id: u.userInfo.externalUserId,
+      user_icon: u.userInfo.avatarImageUrl,
+      raw: resp,
+    };
+  }
+
+  /** cashout_to_paypaybank: PayPay 銀行への自動出金。 */
+  async cashoutToPayPayBank(amount: number): Promise<CashoutResult> {
+    this._requireAuth();
+    const display = (await this._http.get(`${BFF}/v2/getPayoutDisplayInfo`, {
+      headers: this._headers, params: { payPayLang: 'ja' },
+    })).data;
+    this._check(display);
+    const methods: any[] = display.payload.selfPayoutMethodInfoList ?? [];
+    const target = methods.find(m => m?.payoutBankInfo?.bankName === 'PayPay銀行');
+    if (!target) throw new PayPayError('PayPay 銀行の出金口座が登録されていません', display);
+    const payload = {
+      amount,
+      payoutMethodId: target.id,
+      requestId: uuidv4(),
+      agreeSimilarTransactionFlag: false,
+      senderName: 'ＰＡＹＰＡＹ',
+    };
+    const resp = (await this._http.post(`${BFF}/v2/executePayout`, payload, {
+      headers: this._headers, params: this._params,
+    })).data;
+    this._check(resp);
+    const info = resp.payload.paymentInfo.orderTypeSpecificInfo.payoutInfo;
+    return {
+      bank_name: info.bankName,
+      bank_account_type: info.bankAccountType,
+      bank_branch_name: info.bankBranchName,
+      bank_account_number: info.bankAccountNumber,
+    };
+  }
+
+  /** pay_qr_code: 動的 QR の支払い実行。 */
+  async payQrCode(url: string): Promise<PayQRCodeResult> {
+    this._requireAuth();
+    let code = url;
+    if (code.includes('https://qr.paypay.ne.jp/')) code = code.replace('https://qr.paypay.ne.jp/', '');
+    const barcodeInfo = (await this._http.get(`${BFF}/v2/getBarcodeInfo`, {
+      headers: this._headers,
+      params: { code: `https://qr.paypay.ne.jp/${code}`, payPayLang: 'ja', isScannedFromFile: 'false' },
+    })).data;
+    this._check(barcodeInfo);
+    const info = barcodeInfo.payload;
+    const amount = info.codeInfo.dynamicCodeInfo.amount;
+    const paymentMethodId = info.paymentMethodInfo.paymentMethodIdString;
+    const merchantId = info.codeInfo.dynamicCodeInfo.merchantInfo.merchantId;
+    const merchantOrderId = info.codeInfo.dynamicCodeInfo.merchantOrderId;
+    const codeValue = info.codeInfo.dynamicCodeInfo.code;
+
+    const payload = {
+      requestId: uuidv4(),
+      merchantId,
+      storeId: '',
+      stickerId: '',
+      amount,
+      currency: 'JPY',
+      paymentMethodId,
+      paymentMethodType: 'WALLET',
+      agreeSimilarTransactionFlag: false,
+      code: codeValue,
+      merchantOrderId,
+      mode: 'DYNAMIC_QR',
+    };
+    const resp = (await this._http.post(`${BFF}/v2/executePayment`, payload, {
+      headers: this._headers, params: { payPayLang: 'ja' },
+    })).data;
+    this._check(resp);
+    const p = resp.payload.paymentInfo;
+    return {
+      order_id: p.orderInfo.orderId,
+      order_status: p.orderInfo.statusInfo.orderStatus,
+      amount: p.participantDetails.amountDetail.amount.value,
+      merchant_name: p.participantDetails.title,
+      raw: resp,
     };
   }
 
@@ -563,22 +862,44 @@ export class PayPay {
 
   // ============================================================
   // Alive (Bot 検知回避のためのダミーリクエスト)
-  // paython-wrapper と同じ 3 本のリクエストをそのまま打つ
+  // PayPaython-mobile v4.3.0 に合わせて 3 本に更新:
+  //   getGlobalServiceStatus → getHomeDisplayInfo (v4) → getFeatureFlags
   // ============================================================
 
   async alive(): Promise<void> {
     this._requireAuth();
-    const r1 = (await this._http.get(`${BFF}/v1/getGlobalServiceStatus?payPayLang=en`, {
+    const r1 = (await this._http.get(`${BFF}/v1/getGlobalServiceStatus`, {
       headers: this._headers,
+      params: { payPayLang: 'ja' },
     })).data;
     this._check(r1);
-    await this._http.post(`${BFF}/v3/getHomeDisplayInfo?payPayLang=ja`, {
+    await this._http.post(`${BFF}/v4/getHomeDisplayInfo`, {
+      abTestFlags: { dedupeFeatureAndFavoritesTab: false },
       excludeMissionBannerInfoFlag: false,
+      excludeTobaccoPolicyBannerFlag: true,
+      includeAge: true,
       includeBeginnerFlag: false,
       includeSkinInfoFlag: false,
       networkStatus: 'WIFI',
-    }, { headers: this._headers });
-    await this._http.get(`${BFF}/v1/getSearchBar?payPayLang=ja`, { headers: this._headers });
+    }, { headers: this._headers, params: { payPayLang: 'ja' } });
+    await this._http.post(`${BFF}/v1/getFeatureFlags`, {
+      flagNames: [
+        'enable_home_screen_favoriting_suggestions',
+        'home_screen_all_entry_point_ab_test',
+        'enable_cache_encryption_engine',
+        'credit-card-maintenance-in-progress',
+        'vpc_home_merchant_list',
+        'aws_iot_core_migration_enabled',
+        'enable_insufficient_balance_topup_android',
+        'is_post_payment_route_migration_enabled',
+        'enable_transaction_history_migration_android',
+        'enable_nc_redesign',
+        'nearby_halfsheet_combined_ab_test',
+        'home-screen/p2p_tab_bar_item',
+        'cashback_sound_multiplier',
+        'p2p_chat_room_gift_voucher_nudge',
+      ],
+    }, { headers: this._headers, params: { payPayLang: 'ja' } });
   }
 }
 

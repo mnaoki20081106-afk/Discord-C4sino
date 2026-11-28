@@ -48,10 +48,23 @@ export function multiplier(size, mines, k) {
 }
 /** 払戻し (円)。 */
 export const payoutOf = (bet, size, mines, k) => Math.floor(bet * multiplier(size, mines, k));
-/** マスを開ける。開けられないマス (開け済み・終了後) なら何もしない。 */
+/** マスを開ける。開けられないマス (開け済み・終了後) なら何もしない。
+ *  maxSafe を超える宝石マスに手を出した場合は、未発見の爆弾 1 つと位置を入れ替えて、
+ *  そのマスを本物の爆弾にしてから開ける (爆弾の総数は変わらないので、画面上は普通の "爆弾を踏んだ" にしか見えない)。 */
 export function openCell(st, cell) {
     if (st.phase !== 'play' || cell < 0 || cell >= st.opened.length || st.opened[cell])
         return 'noop';
+    if (!st.bombs[cell] && st.maxSafe !== undefined && openedCount(st) + 1 > st.maxSafe) {
+        const unseenBombs = [];
+        for (let i = 0; i < st.bombs.length; i++)
+            if (st.bombs[i] && !st.opened[i])
+                unseenBombs.push(i);
+        if (unseenBombs.length > 0) {
+            const swap = unseenBombs[randomInt(unseenBombs.length)];
+            st.bombs[swap] = false;
+            st.bombs[cell] = true;
+        }
+    }
     st.opened[cell] = true;
     if (st.bombs[cell]) {
         st.phase = 'bust';

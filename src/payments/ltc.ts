@@ -79,6 +79,36 @@ export async function incomingTxs(address: string): Promise<IncomingTx[]> {
   return (await addressFull(address)).incoming;
 }
 
+/** アドレスから出て行った (= アドレスが inputs 側にある) tx の一覧。承認済みでも未承認でも返す。
+ *  LTC 自動送金が broadcasting のまま BOT が落ちたとき、起動時に chain からその送金を照合するのに使う。 */
+export interface OutgoingTxInfo {
+  txid: string;
+  confirmations: number;
+  /** address とは別の宛先 (change を除く) */
+  outputs: Array<{ address: string; valueSat: number }>;
+  receivedAt: number;
+}
+export async function addressOutgoingTxs(address: string): Promise<OutgoingTxInfo[]> {
+  const token = process.env.LTC_API_TOKEN;
+  const res = await fetch(`${API}/addrs/${address}/full?limit=50${token ? `&token=${token}` : ''}`);
+  if (!res.ok) throw new Error(`full ${res.status}`);
+  const j = await res.json() as { txs?: Array<{
+    hash: string; confirmations: number; received?: string;
+    inputs?: Array<{ addresses?: string[] }>;
+    outputs: Array<{ addresses?: string[]; value: number }>;
+  }> };
+  const out: OutgoingTxInfo[] = [];
+  for (const tx of j.txs ?? []) {
+    // address が inputs にある = 外向きの送金
+    if (!(tx.inputs ?? []).some(x => x.addresses?.includes(address))) continue;
+    const outputs: Array<{ address: string; valueSat: number }> = [];
+    for (const o of tx.outputs) for (const a of o.addresses ?? []) if (a !== address) outputs.push({ address: a, valueSat: o.value });
+    const t = tx.received ? Math.floor(Date.parse(tx.received) / 1000) : Math.floor(Date.now() / 1000);
+    out.push({ txid: tx.hash, confirmations: tx.confirmations, outputs, receivedAt: Number.isFinite(t) ? t : Math.floor(Date.now() / 1000) });
+  }
+  return out;
+}
+
 /** アドレスの残高 (litoshi、少なめに見積もった値) と、届いた送金。1 回の問い合わせで両方取る。 */
 export async function addressFull(address: string): Promise<{ balanceSat: number; incoming: IncomingTx[] }> {
   const token = process.env.LTC_API_TOKEN;

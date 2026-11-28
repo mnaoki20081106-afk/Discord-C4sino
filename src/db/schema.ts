@@ -220,6 +220,10 @@ try {
   }
 } catch (e) { console.error('[db] withdrawals migration failed:', e); }
 
+// Migration: withdrawals に amount_sat (LTC の送金量、litoshi) を足す。
+// broadcasting のまま BOT がクラッシュしたとき、起動時に chain から回収するために必要。
+try { db.exec(`ALTER TABLE withdrawals ADD COLUMN amount_sat INTEGER`); } catch { /* exists */ }
+
 // Migration: 既存ユーザーに pp_reserve / ltc_reserve が無ければ追加し、
 // 既存 balance を全額 pp_reserve に寄せる (保守的 — LTC 出金は実際の LTC 入金分に限定)
 for (const col of ['pp_reserve INTEGER NOT NULL DEFAULT 0', 'ltc_reserve INTEGER NOT NULL DEFAULT 0']) {
@@ -227,8 +231,44 @@ for (const col of ['pp_reserve INTEGER NOT NULL DEFAULT 0', 'ltc_reserve INTEGER
 }
 db.exec(`UPDATE users SET pp_reserve = balance WHERE pp_reserve + ltc_reserve = 0 AND balance > 0`);
 
+// Migration: wager_credit (出金可能額の内部カウンタ)。
+// BET するたびに賭け額ぶん増え、出金で減る。常に 0 ≤ wager_credit ≤ balance にクランプ。
+// 既存ユーザーは初回だけ wager_credit = balance (grandfather、既存の chip はすぐ出金できる)。
+try {
+  db.exec(`ALTER TABLE users ADD COLUMN wager_credit INTEGER NOT NULL DEFAULT 0`);
+  db.exec(`UPDATE users SET wager_credit = balance`);
+} catch { /* 既存 — 再実行しない (ゼロリセットを避ける) */ }
+
 export function ensureUser(discordId: string) {
   db.prepare('INSERT OR IGNORE INTO users(discord_id) VALUES (?)').run(discordId);
+}
+
+/**
+ * ledger の reason から wager_credit (出金可能額) の変化量を導く。
+ * - BET 置く     : 残高が減る → wager_credit を同額増やす (bet したので withdrawable)
+ * - BET 取消     : 残高が戻る → wager_credit を同額減らす
+ * - セッション返金: 残高が戻る → wager_credit を同額減らす
+ * - 出金         : 残高が減る → wager_credit も同額減らす
+ * - 出金却下・回収: 残高が戻る → wager_credit も同額戻す
+ * - 入金 / WIN / grant / admin / fee 等: 無変化
+ * 計算結果は最終的に 0 ≤ wager_credit ≤ balance にクランプする。
+ */
+function wagerCreditChange(reason: string, delta: number): number {
+  if (delta < 0 && reason.startsWith('bet:') &&
+      !reason.endsWith(':undo') && !reason.endsWith(':takedown')) return -delta;
+  if (delta > 0 && reason.startsWith('bet:') &&
+      (reason.endsWith(':undo') || reason.endsWith(':takedown'))) return -delta;
+  if (delta > 0 && reason.startsWith('refund:')) return -delta;
+  if (delta < 0 && (reason === 'withdraw:paypay' || reason === 'withdraw:ltc')) return delta;
+  if (delta > 0 && reason.startsWith('withdraw:') && reason.includes('refund')) return delta;
+  return 0;
+}
+
+/** 現在の出金可能額を返す (0 以上、balance 以下)。 */
+export function getWagerCredit(discordId: string): number {
+  ensureUser(discordId);
+  const r = db.prepare('SELECT wager_credit FROM users WHERE discord_id=?').get(discordId) as { wager_credit: number } | undefined;
+  return r?.wager_credit ?? 0;
 }
 
 export interface Reserves { pp: number; ltc: number; total: number }
@@ -240,12 +280,20 @@ export function getReserves(discordId: string): Reserves {
   return { pp: r.pp_reserve, ltc: r.ltc_reserve, total: r.balance };
 }
 
+/** balance 更新後の wager_credit を reason から調整し、常に [0, balance] にクランプする。 */
+function postWagerUpdate(discordId: string, reason: string, signedDelta: number) {
+  const wc = wagerCreditChange(reason, signedDelta);
+  db.prepare(`UPDATE users SET wager_credit = MAX(0, MIN(balance, wager_credit + ?)) WHERE discord_id = ?`)
+    .run(wc, discordId);
+}
+
 /** 指定レールに加算 (入金、WIN の rail 固定クレジット、refund で使用) */
 export const creditRail = db.transaction((discordId: string, rail: 'pp'|'ltc', amount: number, reason: string, ref?: string) => {
   if (amount <= 0) throw new Error('amount must be positive');
   ensureUser(discordId);
   const col = rail === 'pp' ? 'pp_reserve' : 'ltc_reserve';
   db.prepare(`UPDATE users SET balance = balance + ?, ${col} = ${col} + ? WHERE discord_id = ?`).run(amount, amount, discordId);
+  postWagerUpdate(discordId, reason, amount);
   db.prepare('INSERT INTO ledger(discord_id, delta, reason, ref) VALUES (?,?,?,?)').run(discordId, amount, reason, ref ?? null);
 });
 
@@ -257,6 +305,7 @@ export const debitRail = db.transaction((discordId: string, rail: 'pp'|'ltc', am
   const upd = db.prepare(`UPDATE users SET balance = balance - ?, ${col} = ${col} - ? WHERE discord_id = ? AND ${col} >= ?`)
     .run(amount, amount, discordId, amount);
   if (upd.changes !== 1) throw new Error(`${rail} reserve insufficient`);
+  postWagerUpdate(discordId, reason, -amount);
   db.prepare('INSERT INTO ledger(discord_id, delta, reason, ref) VALUES (?,?,?,?)').run(discordId, -amount, reason, ref ?? null);
 });
 
@@ -268,6 +317,7 @@ export const applyMix = db.transaction((discordId: string, ppDelta: number, ltcD
     WHERE discord_id = ? AND pp_reserve + ? >= 0 AND ltc_reserve + ? >= 0`)
     .run(delta, ppDelta, ltcDelta, discordId, ppDelta, ltcDelta);
   if (upd.changes !== 1) throw new Error('mix apply failed (insufficient in some rail)');
+  postWagerUpdate(discordId, reason, delta);
   db.prepare('INSERT INTO ledger(discord_id, delta, reason, ref) VALUES (?,?,?,?)').run(discordId, delta, reason, ref ?? null);
 });
 
@@ -342,6 +392,7 @@ export const txCredit = db.transaction((discordId: string, delta: number, reason
     WHERE discord_id = ? AND pp_reserve + ? >= 0 AND ltc_reserve + ? >= 0`)
     .run(delta, ppDelta, ltcDelta, discordId, ppDelta, ltcDelta);
   if (upd.changes !== 1) throw new Error('insufficient funds or user missing');
+  postWagerUpdate(discordId, reason, delta);
   db.prepare('INSERT INTO ledger(discord_id, delta, reason, ref) VALUES (?,?,?,?)').run(discordId, delta, reason, ref ?? null);
 });
 
