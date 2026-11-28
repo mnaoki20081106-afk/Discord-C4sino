@@ -287,12 +287,10 @@ export async function recoverLtcBroadcasting(client: Client): Promise<void> {
         console.log(`[withdraw-recover] #${w.id} → sent (chain 確認, txid=${match.txid.slice(0, 16)}…, confirmations=${match.confirmations})`);
         try {
           const user = await client.users.fetch(w.discord_id);
-          await user.send({ embeds: [new EmbedBuilder()
-            .setTitle(`${emoji('pay_ltc')} LTC 出金完了 — #${w.id}`)
-            .setColor(0x22c55e)
+          await user.send({ embeds: [new EmbedBuilder().setColor(0x22c55e)
+            .setTitle(`${emoji('pay_ltc')} LTC 出金 #${w.id} 送信完了`)
             .setDescription('ネットワークの反映を確認しました (遅延通知)。')
-            .addFields({ name: 'txid', value: `\`${match.txid}\`` })
-            .setFooter({ text: `Withdrawal #${w.id}` })] });
+            .addFields({ name: 'txid', value: `\`${match.txid}\`` })] });
         } catch { /* DM 失敗は致命でない */ }
       }
       continue;
@@ -310,11 +308,9 @@ export async function recoverLtcBroadcasting(client: Client): Promise<void> {
         console.log(`[withdraw-recover] #${w.id} → refunded (${age}s elapsed, chain に無し)`);
         try {
           const user = await client.users.fetch(w.discord_id);
-          await user.send({ embeds: [new EmbedBuilder()
+          await user.send({ embeds: [new EmbedBuilder().setColor(0xef4444)
             .setTitle(`${emoji('rule_warn')} LTC 出金 #${w.id} — 送信できませんでした`)
-            .setColor(0xef4444)
-            .setDescription('システムの問題で送信が止まりました。chip は返金しましたので、もう一度やり直してください。')
-            .setFooter({ text: `Withdrawal #${w.id}` })] });
+            .setDescription('システムの問題で送信が止まりました。chip は返金しましたので、もう一度やり直してください。')] });
         } catch { /* DM 失敗は致命でない */ }
       } catch (e) {
         console.error(`[withdraw-recover] #${w.id} refund 失敗:`, (e as Error).message);
