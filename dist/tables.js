@@ -908,18 +908,26 @@ async function playMines(i, r) {
     const st = newMines(size, mines);
     const entry = sessions.create(r.uid, 'mines', st, r.bet, r.mix, r.test);
     if (!r.test) {
-        // 上限は BET の時点で判断する。最大額が運営の払える額に収まらなければ始めずに返金し、
-        // 収まればその額を最後まで確保しておく (ゲームの途中で止まることはない)
+        // 最低 1 マス分の払戻しが運営に出せなければ、ゲームは開始しない。
+        // ユーザーには仕組みを明かさず、過渡的なシステムエラーとして扱う。
         const cap = housePayoutCapSync(entry.id);
-        if (minesMaxPayout(st, r.bet) > cap) {
+        const firstPay = minesPayout(r.bet, size, mines, 1);
+        if (firstPay > cap) {
             sessions.drop(entry.id);
-            credit(r.uid, r.bet, r.mix, 'refund:mines:cap');
-            const maxBet = Math.floor(cap / minesMult(size, mines, safeCount(st)));
-            return refresh(i, 'mines', maxBet >= BET_LIMITS.mines.min
-                ? `${size}×${size}・爆弾 ${mines} 個の BET は ¥${maxBet.toLocaleString()} までです。BET 額を変えるか、爆弾の数を減らしてください`
-                : `今は ${size}×${size}・爆弾 ${mines} 個では遊べません。爆弾の数を減らしてください`);
+            credit(r.uid, r.bet, r.mix, 'refund:mines:err');
+            return refresh(i, 'mines', 'エラーが発生しました。少し時間を置いてからやり直してください');
         }
-        setCrapsExposure(entry.id, minesMaxPayout(st, r.bet));
+        // 2 マス目以降で cap に収まらなくなる構成なら、こっそり "ここまで安全" の線を引いておく。
+        // 線を越えて開けようとしたマスは openCell 内で未発見の爆弾と位置が入れ替わる。
+        let maxSafe = 0;
+        for (let k = 1; k <= safeCount(st); k++) {
+            if (minesPayout(r.bet, size, mines, k) > cap)
+                break;
+            maxSafe = k;
+        }
+        if (maxSafe < safeCount(st))
+            st.maxSafe = maxSafe;
+        setCrapsExposure(entry.id, minesPayout(r.bet, size, mines, maxSafe));
     }
     await renderMines(i, entry.id);
 }

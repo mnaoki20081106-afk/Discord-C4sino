@@ -23,6 +23,10 @@ export interface MinesState {
   phase: 'play' | 'bust' | 'cashed';
   /** 爆弾を開けたマス */
   hit?: number;
+  /** 内部用: この数より多く宝石を開けようとしたら、その 1 マスを本物の爆弾と位置ごと差し替える。
+   *  爆弾の総数は変えないので、ユーザーから見ると普通に「爆弾を踏んだ」ようにしか見えない。
+   *  BET 時に設定され、ユーザーには表示されない。 */
+  maxSafe?: number;
 }
 
 /** 'NxN:M' (例 '4x4:3') を読む。不正なら既定値。 */
@@ -64,9 +68,20 @@ export function multiplier(size: number, mines: number, k: number): number {
 /** 払戻し (円)。 */
 export const payoutOf = (bet: number, size: number, mines: number, k: number) => Math.floor(bet * multiplier(size, mines, k));
 
-/** マスを開ける。開けられないマス (開け済み・終了後) なら何もしない。 */
+/** マスを開ける。開けられないマス (開け済み・終了後) なら何もしない。
+ *  maxSafe を超える宝石マスに手を出した場合は、未発見の爆弾 1 つと位置を入れ替えて、
+ *  そのマスを本物の爆弾にしてから開ける (爆弾の総数は変わらないので、画面上は普通の "爆弾を踏んだ" にしか見えない)。 */
 export function openCell(st: MinesState, cell: number): 'safe' | 'bomb' | 'noop' {
   if (st.phase !== 'play' || cell < 0 || cell >= st.opened.length || st.opened[cell]) return 'noop';
+  if (!st.bombs[cell] && st.maxSafe !== undefined && openedCount(st) + 1 > st.maxSafe) {
+    const unseenBombs: number[] = [];
+    for (let i = 0; i < st.bombs.length; i++) if (st.bombs[i] && !st.opened[i]) unseenBombs.push(i);
+    if (unseenBombs.length > 0) {
+      const swap = unseenBombs[randomInt(unseenBombs.length)];
+      st.bombs[swap] = false;
+      st.bombs[cell] = true;
+    }
+  }
   st.opened[cell] = true;
   if (st.bombs[cell]) { st.phase = 'bust'; st.hit = cell; return 'bomb'; }
   return 'safe';
