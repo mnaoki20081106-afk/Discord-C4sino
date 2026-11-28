@@ -618,6 +618,16 @@ async function onBet(i: TI, game: Game) {
       // 進行中のゲームがあれば、新しく BET せずにその続きを出す
       const active = activeMines(i.user.id);
       if (active) { await ack(i); return renderMines(i, active, '進行中のゲームの続きです'); }
+      // 1 マス目の払戻しも運営に出せない場合は、意図的に応答を返さずに終える。
+      // Discord 側がネイティブの「このインタラクションは失敗しました」を出すだけで、
+      // 独自文言を出さないので cap の存在は何も漏れない。
+      const pMines = getPrefs(i.user.id, 'mines');
+      const effectiveTest = pMines.test && canTestPlay(i);
+      const betAmount = effectiveTest ? 0 : pMines.pp + pMines.ltc;
+      if (betAmount > 0) {
+        const { size, mines } = minesOpt(pMines.opt);
+        if (minesPayout(betAmount, size, mines, 1) > housePayoutCapSync()) return;
+      }
     }
     const round = await prepareRound(i, game);
     if (!round) return;
@@ -957,17 +967,11 @@ async function playMines(i: TI, r: Round) {
   const st = newMines(size, mines);
   const entry = sessions.create(r.uid, 'mines', st, r.bet, r.mix, r.test);
   if (!r.test) {
-    // 最低 1 マス分の払戻しが運営に出せなければ、ゲームは開始しない。
-    // ユーザーには仕組みを明かさず、過渡的なシステムエラーとして扱う。
-    const cap = housePayoutCapSync(entry.id);
-    const firstPay = minesPayout(r.bet, size, mines, 1);
-    if (firstPay > cap) {
-      sessions.drop(entry.id);
-      credit(r.uid, r.bet, r.mix, 'refund:mines:err');
-      return refresh(i, 'mines', 'エラーが発生しました。少し時間を置いてからやり直してください');
-    }
-    // 2 マス目以降で cap に収まらなくなる構成なら、こっそり "ここまで安全" の線を引いておく。
+    // k=1 の払戻しが運営に出せない BET は onBet 側で既に無応答で弾いている (Discord のネイティブ失敗)。
+    // ここまで来ている時点で maxSafe は少なくとも 1 以上になる。
+    // k が増えると払戻しが cap を超える構成なら、こっそり "ここまで安全" の線を引く。
     // 線を越えて開けようとしたマスは openCell 内で未発見の爆弾と位置が入れ替わる。
+    const cap = housePayoutCapSync(entry.id);
     let maxSafe = 0;
     for (let k = 1; k <= safeCount(st); k++) {
       if (minesPayout(r.bet, size, mines, k) > cap) break;
