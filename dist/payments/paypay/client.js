@@ -410,6 +410,7 @@ export class PayPay {
             socketConnection: 'P2P',
             theme: pochibukuro ? 'pochibukuro' : theme,
             source: 'sendmoney_home_sns',
+            ackPhoneCallDetected: false,
         };
         if (passcode)
             payload.passcode = passcode;
@@ -426,6 +427,83 @@ export class PayPay {
             chat_room_id: data.payload.chatRoomId,
             order_id: data.payload.orderId,
             raw: data,
+        };
+    }
+    /** 特定ユーザー (external_user_id) に対する直接送金。URL 転送できないので、資金洗浄経路を塞げる。
+     *  S4002 (リスク警告) が返った場合は 5 秒待って ack フラグを立てて再試行する。 */
+    async sendMoney(amount, externalReceiverId, opts = {}) {
+        this._requireAuth();
+        const theme = opts.pochibukuro ? 'pochibukuro' : (opts.theme ?? 'default-sendmoney');
+        const build = (ackRiskError, ackPhoneCallDetected) => ({
+            amount,
+            theme,
+            requestId: uuidv4(),
+            externalReceiverId,
+            ackRiskError,
+            ackPhoneCallDetected,
+            source: 'sendmoney_history_chat',
+            qrCodeId: '',
+            metricMetadata: { timestamp: Date.now() / 1000 },
+        });
+        let resp = (await this._http.post(`${P2P}/v3/executeP2PSendMoney`, build(false, false), {
+            headers: this._headers,
+            params: this._params,
+        })).data;
+        if (typeof resp !== 'object')
+            throw new PayPayNetworkError('日本以外からは接続できません');
+        if (resp?.header?.resultCode === 'S4002') {
+            await new Promise(ok => setTimeout(ok, 5000));
+            resp = (await this._http.post(`${P2P}/v3/executeP2PSendMoney`, build(true, true), {
+                headers: this._headers,
+                params: this._params,
+            })).data;
+            if (typeof resp !== 'object')
+                throw new PayPayNetworkError('日本以外からは接続できません');
+        }
+        this._check(resp);
+        return { chat_room_id: resp.payload.chatRoomId, order_id: resp.payload.orderId, raw: resp };
+    }
+    /** 指定ユーザーとのチャットルームを初期化 (未送金相手にも sendMoney できるようにする準備)。 */
+    async initializeChatRoom(externalUserId) {
+        this._requireAuth();
+        const resp = (await this._http.post(`${P2P}/v1/initialiseOneToOneAndLinkChatRoom`, {
+            returnChatRoom: true,
+            shouldCheckMessageForFriendshipAppeal: true,
+            externalUserId,
+            socketConnection: 'P2P',
+        }, { headers: this._headers, params: this._params })).data;
+        this._check(resp);
+        return { chatroom_id: resp.payload.chatRoom.chatRoomId, raw: resp };
+    }
+    /** PayPay 銀行 (運営自身の銀行口座) への自動出金。運営利益引き出しの経路。 */
+    async cashoutToPayPayBank(amount) {
+        this._requireAuth();
+        const display = (await this._http.get(`${BFF}/v2/getPayoutDisplayInfo`, {
+            headers: this._headers, params: { payPayLang: 'ja' },
+        })).data;
+        this._check(display);
+        const methods = display.payload.selfPayoutMethodInfoList ?? [];
+        const target = methods.find(m => m?.payoutBankInfo?.bankName === 'PayPay銀行');
+        if (!target)
+            throw new PayPayError('PayPay 銀行の出金口座が登録されていません', display);
+        const payload = {
+            amount,
+            payoutMethodId: target.id,
+            requestId: uuidv4(),
+            agreeSimilarTransactionFlag: false,
+            senderName: 'ＰＡＹＰＡＹ',
+        };
+        const resp = (await this._http.post(`${BFF}/v2/executePayout`, payload, {
+            headers: this._headers, params: this._params,
+        })).data;
+        this._check(resp);
+        const info = resp.payload.paymentInfo.orderTypeSpecificInfo.payoutInfo;
+        return {
+            bank_name: info.bankName,
+            bank_account_type: info.bankAccountType,
+            bank_branch_name: info.bankBranchName,
+            bank_account_number: info.bankAccountNumber,
+            raw: resp,
         };
     }
     async linkCancel(urlOrId, linkInfo) {
@@ -482,21 +560,43 @@ export class PayPay {
     }
     // ============================================================
     // Alive (Bot 検知回避のためのダミーリクエスト)
-    // paython-wrapper と同じ 3 本のリクエストをそのまま打つ
+    // PayPaython-mobile v4.3.0 に合わせて 3 本に更新:
+    //   getGlobalServiceStatus → getHomeDisplayInfo (v4) → getFeatureFlags
     // ============================================================
     async alive() {
         this._requireAuth();
-        const r1 = (await this._http.get(`${BFF}/v1/getGlobalServiceStatus?payPayLang=en`, {
+        const r1 = (await this._http.get(`${BFF}/v1/getGlobalServiceStatus`, {
             headers: this._headers,
+            params: { payPayLang: 'ja' },
         })).data;
         this._check(r1);
-        await this._http.post(`${BFF}/v3/getHomeDisplayInfo?payPayLang=ja`, {
+        await this._http.post(`${BFF}/v4/getHomeDisplayInfo`, {
+            abTestFlags: { dedupeFeatureAndFavoritesTab: false },
             excludeMissionBannerInfoFlag: false,
+            excludeTobaccoPolicyBannerFlag: true,
+            includeAge: true,
             includeBeginnerFlag: false,
             includeSkinInfoFlag: false,
             networkStatus: 'WIFI',
-        }, { headers: this._headers });
-        await this._http.get(`${BFF}/v1/getSearchBar?payPayLang=ja`, { headers: this._headers });
+        }, { headers: this._headers, params: { payPayLang: 'ja' } });
+        await this._http.post(`${BFF}/v1/getFeatureFlags`, {
+            flagNames: [
+                'enable_home_screen_favoriting_suggestions',
+                'home_screen_all_entry_point_ab_test',
+                'enable_cache_encryption_engine',
+                'credit-card-maintenance-in-progress',
+                'vpc_home_merchant_list',
+                'aws_iot_core_migration_enabled',
+                'enable_insufficient_balance_topup_android',
+                'is_post_payment_route_migration_enabled',
+                'enable_transaction_history_migration_android',
+                'enable_nc_redesign',
+                'nearby_halfsheet_combined_ab_test',
+                'home-screen/p2p_tab_bar_item',
+                'cashback_sound_multiplier',
+                'p2p_chat_room_gift_voucher_nudge',
+            ],
+        }, { headers: this._headers, params: { payPayLang: 'ja' } });
     }
 }
 // placeholder for unused imports linter

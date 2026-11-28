@@ -133,6 +133,39 @@ export async function createLink(access_token: string, amount: number, passcode?
   return pp.createLink(amount, passcode);
 }
 
+/** 特定の PayPay ユーザー (external_user_id) に対する直接送金。
+ *  bearer-URL 経路と違い、宛先アカウントを指定できるので、資金洗浄経路を塞げる。 */
+export async function sendMoneyToUser(
+  access_token: string,
+  amount: number,
+  externalReceiverId: string,
+): Promise<{ order_id: string; chat_room_id: string }> {
+  const pp = new PayPay({ access_token });
+  const r = await pp.sendMoney(amount, externalReceiverId);
+  return { order_id: r.order_id, chat_room_id: r.chat_room_id };
+}
+
+/** 90 日 access_token を生かし続けるための keep-alive。定期的 (例: 24h) に叩くと切れにくい。 */
+export async function keepAlive(access_token: string): Promise<void> {
+  const pp = new PayPay({ access_token });
+  await pp.alive();
+}
+
+/** 運営利益を PayPay 銀行口座へ直接送金 (link 不要)。
+ *  事前に PayPay アプリで PayPay 銀行の出金口座を登録しておく必要あり。 */
+export async function cashoutToPayPayBank(access_token: string, amount: number): Promise<{
+  bank_name: string; bank_account_type: string; bank_branch_name: string; bank_account_number: string;
+}> {
+  const pp = new PayPay({ access_token });
+  const r = await pp.cashoutToPayPayBank(amount);
+  return {
+    bank_name: r.bank_name,
+    bank_account_type: r.bank_account_type,
+    bank_branch_name: r.bank_branch_name,
+    bank_account_number: r.bank_account_number,
+  };
+}
+
 /** PayPay 送金リンク URL / ID 抽出。既存呼び出し元の "null 判定" に合わせるため非認識は null を返す。 */
 export function extractLinkId(input: string): string | null {
   const s = input.trim();
